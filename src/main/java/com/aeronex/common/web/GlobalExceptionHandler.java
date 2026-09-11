@@ -14,6 +14,9 @@ import com.aeronex.aircraft.exception.AircraftNotFoundException;
 import com.aeronex.aircraft.exception.DuplicateRegistrationNumberException;
 import com.aeronex.airport.exception.AirportNotFoundException;
 import com.aeronex.airport.exception.DuplicateAirportCodeException;
+import com.aeronex.flight.exception.AircraftNotAvailableException;
+import com.aeronex.flight.exception.FlightNotFoundException;
+import com.aeronex.flight.exception.InvalidFlightException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -38,6 +41,24 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(DuplicateRegistrationNumberException.class)
     public ResponseEntity<ErrorResponse> handleDuplicateRegistrationNumber(DuplicateRegistrationNumberException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of(HttpStatus.CONFLICT, ex.getMessage()));
+    }
+
+    @ExceptionHandler(FlightNotFoundException.class)
+    public ResponseEntity<ErrorResponse> handleFlightNotFound(FlightNotFoundException ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ErrorResponse.of(HttpStatus.NOT_FOUND, ex.getMessage()));
+    }
+
+    @ExceptionHandler(InvalidFlightException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidFlight(InvalidFlightException ex) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ErrorResponse.of(HttpStatus.BAD_REQUEST, ex.getMessage()));
+    }
+
+    @ExceptionHandler(AircraftNotAvailableException.class)
+    public ResponseEntity<ErrorResponse> handleAircraftNotAvailable(AircraftNotAvailableException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(ErrorResponse.of(HttpStatus.CONFLICT, ex.getMessage()));
     }
