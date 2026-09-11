@@ -10,6 +10,8 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
+import com.aeronex.aircraft.exception.AircraftNotFoundException;
+import com.aeronex.aircraft.exception.DuplicateRegistrationNumberException;
 import com.aeronex.airport.exception.AirportNotFoundException;
 import com.aeronex.airport.exception.DuplicateAirportCodeException;
 
@@ -24,6 +26,18 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(DuplicateAirportCodeException.class)
     public ResponseEntity<ErrorResponse> handleDuplicateAirportCode(DuplicateAirportCodeException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of(HttpStatus.CONFLICT, ex.getMessage()));
+    }
+
+    @ExceptionHandler(AircraftNotFoundException.class)
+    public ResponseEntity<ErrorResponse> handleAircraftNotFound(AircraftNotFoundException ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ErrorResponse.of(HttpStatus.NOT_FOUND, ex.getMessage()));
+    }
+
+    @ExceptionHandler(DuplicateRegistrationNumberException.class)
+    public ResponseEntity<ErrorResponse> handleDuplicateRegistrationNumber(DuplicateRegistrationNumberException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(ErrorResponse.of(HttpStatus.CONFLICT, ex.getMessage()));
     }
