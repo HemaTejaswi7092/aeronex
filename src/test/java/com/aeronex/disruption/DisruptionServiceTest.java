@@ -3,6 +3,12 @@ package com.aeronex.disruption;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
@@ -23,6 +29,8 @@ import com.aeronex.disruption.dto.DisruptionResponse;
 import com.aeronex.disruption.exception.DisruptionNotFoundException;
 import com.aeronex.disruption.exception.FlightNotEligibleForDisruptionException;
 import com.aeronex.disruption.exception.InvalidDisruptionException;
+import com.aeronex.eventing.DomainEventPublisher;
+import com.aeronex.eventing.kafka.KafkaTopics;
 import com.aeronex.flight.Flight;
 import com.aeronex.flight.FlightRepository;
 import com.aeronex.flight.FlightStatus;
@@ -36,6 +44,9 @@ class DisruptionServiceTest {
 
     @Mock
     private FlightRepository flightRepository;
+
+    @Mock
+    private DomainEventPublisher domainEventPublisher;
 
     private DisruptionService disruptionService;
 
@@ -60,15 +71,21 @@ class DisruptionServiceTest {
                 "Heavy snow at origin", 45, reportedAt, status, resolvedAt);
     }
 
+    private Disruption withGeneratedId(Disruption disruption) {
+        ReflectionTestUtils.setField(disruption, "id", UUID.randomUUID());
+        return disruption;
+    }
+
     @BeforeEach
     void setUp() {
-        disruptionService = new DisruptionService(disruptionRepository, flightRepository);
+        disruptionService = new DisruptionService(disruptionRepository, flightRepository, domainEventPublisher);
     }
 
     @Test
     void createDefaultsReportedAtAndStatusWhenOmitted() {
         when(flightRepository.findById(flightId)).thenReturn(Optional.of(flightWithStatus(FlightStatus.SCHEDULED)));
-        when(disruptionRepository.save(any(Disruption.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(disruptionRepository.save(any(Disruption.class)))
+                .thenAnswer(invocation -> withGeneratedId(invocation.getArgument(0)));
 
         DisruptionResponse response = disruptionService.create(validRequest(null, null, null));
 
@@ -77,6 +94,10 @@ class DisruptionServiceTest {
         assertThat(response.flight().flightNumber()).isEqualTo("AA100");
         assertThat(response.flight().originIataCode()).isEqualTo("JFK");
         assertThat(response.flight().destinationIataCode()).isEqualTo("LAX");
+        verify(domainEventPublisher).publish(eq(KafkaTopics.DISRUPTION_REPORTED), any(UUID.class),
+                eq("FlightDisruptionReported"), eq(1), any());
+        verify(domainEventPublisher, never()).publish(eq(KafkaTopics.DISRUPTION_RESOLVED), any(UUID.class),
+                anyString(), anyInt(), any());
     }
 
     @Test
@@ -116,13 +137,18 @@ class DisruptionServiceTest {
     @Test
     void createAutoSetsResolvedAtWhenStatusResolvedAndResolvedAtOmitted() {
         when(flightRepository.findById(flightId)).thenReturn(Optional.of(flightWithStatus(FlightStatus.SCHEDULED)));
-        when(disruptionRepository.save(any(Disruption.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(disruptionRepository.save(any(Disruption.class)))
+                .thenAnswer(invocation -> withGeneratedId(invocation.getArgument(0)));
 
         DisruptionResponse response = disruptionService.create(
                 validRequest(DisruptionStatus.RESOLVED, null, null));
 
         assertThat(response.status()).isEqualTo(DisruptionStatus.RESOLVED);
         assertThat(response.resolvedAt()).isNotNull();
+        verify(domainEventPublisher).publish(eq(KafkaTopics.DISRUPTION_REPORTED), any(UUID.class),
+                eq("FlightDisruptionReported"), eq(1), any());
+        verify(domainEventPublisher).publish(eq(KafkaTopics.DISRUPTION_RESOLVED), any(UUID.class),
+                eq("FlightDisruptionResolved"), eq(1), any());
     }
 
     @Test
@@ -170,6 +196,8 @@ class DisruptionServiceTest {
 
         assertThat(response.status()).isEqualTo(DisruptionStatus.RESOLVED);
         assertThat(response.resolvedAt()).isNotNull();
+        verify(domainEventPublisher, times(1)).publish(eq(KafkaTopics.DISRUPTION_RESOLVED), any(UUID.class),
+                eq("FlightDisruptionResolved"), eq(1), any());
     }
 
     @Test
@@ -188,5 +216,7 @@ class DisruptionServiceTest {
         DisruptionResponse response = disruptionService.resolve(id);
 
         assertThat(response.resolvedAt()).isEqualTo(originalResolvedAt);
+        verify(domainEventPublisher, never()).publish(eq(KafkaTopics.DISRUPTION_RESOLVED), any(UUID.class),
+                anyString(), anyInt(), any());
     }
 }

@@ -171,7 +171,8 @@ class DisruptionControllerIntegrationTest {
 
     @Test
     void createWithNegativeEstimatedDelayReturnsBadRequestWithFieldErrors() throws Exception {
-        String json = validDisruptionJson(scheduledFlight.getId()).replace("45", "-10");
+        String json = validDisruptionJson(scheduledFlight.getId())
+                .replace("\"estimatedDelayMinutes\": 45", "\"estimatedDelayMinutes\": -10");
 
         mockMvc.perform(post("/api/disruptions").contentType(MediaType.APPLICATION_JSON).content(json))
                 .andExpect(status().isBadRequest())
