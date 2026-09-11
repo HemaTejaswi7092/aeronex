@@ -14,6 +14,9 @@ import com.aeronex.aircraft.exception.AircraftNotFoundException;
 import com.aeronex.aircraft.exception.DuplicateRegistrationNumberException;
 import com.aeronex.airport.exception.AirportNotFoundException;
 import com.aeronex.airport.exception.DuplicateAirportCodeException;
+import com.aeronex.disruption.exception.DisruptionNotFoundException;
+import com.aeronex.disruption.exception.FlightNotEligibleForDisruptionException;
+import com.aeronex.disruption.exception.InvalidDisruptionException;
 import com.aeronex.flight.exception.AircraftNotAvailableException;
 import com.aeronex.flight.exception.FlightNotFoundException;
 import com.aeronex.flight.exception.InvalidFlightException;
@@ -59,6 +62,25 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(AircraftNotAvailableException.class)
     public ResponseEntity<ErrorResponse> handleAircraftNotAvailable(AircraftNotAvailableException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of(HttpStatus.CONFLICT, ex.getMessage()));
+    }
+
+    @ExceptionHandler(DisruptionNotFoundException.class)
+    public ResponseEntity<ErrorResponse> handleDisruptionNotFound(DisruptionNotFoundException ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ErrorResponse.of(HttpStatus.NOT_FOUND, ex.getMessage()));
+    }
+
+    @ExceptionHandler(InvalidDisruptionException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidDisruption(InvalidDisruptionException ex) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ErrorResponse.of(HttpStatus.BAD_REQUEST, ex.getMessage()));
+    }
+
+    @ExceptionHandler(FlightNotEligibleForDisruptionException.class)
+    public ResponseEntity<ErrorResponse> handleFlightNotEligibleForDisruption(
+            FlightNotEligibleForDisruptionException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(ErrorResponse.of(HttpStatus.CONFLICT, ex.getMessage()));
     }
