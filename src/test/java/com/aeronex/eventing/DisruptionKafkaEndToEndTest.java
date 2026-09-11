@@ -9,6 +9,7 @@ import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.actuate.health.Status;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.kafka.test.context.EmbeddedKafka;
 
@@ -21,11 +22,14 @@ import com.aeronex.disruption.DisruptionType;
 import com.aeronex.disruption.DisruptionService;
 import com.aeronex.disruption.dto.DisruptionCreateRequest;
 import com.aeronex.disruption.dto.DisruptionResponse;
+import com.aeronex.eventing.kafka.KafkaHealthIndicator;
 import com.aeronex.eventing.kafka.KafkaTopics;
 import com.aeronex.eventing.outbox.OutboxEventRepository;
 import com.aeronex.flight.Flight;
 import com.aeronex.flight.FlightRepository;
 import com.aeronex.flight.FlightStatus;
+
+import io.micrometer.core.instrument.MeterRegistry;
 
 /**
  * Proves the real end-to-end path: DisruptionService writes an outbox row in the same
@@ -59,6 +63,12 @@ class DisruptionKafkaEndToEndTest {
     @Autowired
     private OutboxEventRepository outboxEventRepository;
 
+    @Autowired
+    private MeterRegistry meterRegistry;
+
+    @Autowired
+    private KafkaHealthIndicator kafkaHealthIndicator;
+
     @Test
     void disruptionReportedAndResolvedFlowThroughKafkaToTheAuditLog() throws Exception {
         Airport jfk = airportRepository.saveAndFlush(new Airport("JFK", null,
@@ -91,6 +101,17 @@ class DisruptionKafkaEndToEndTest {
         assertThat(afterResolved.get(1).getEventType()).isEqualTo("FlightDisruptionResolved");
 
         awaitAllOutboxEventsPublished();
+
+        assertThat(meterRegistry.counter("aeronex.disruption.events.processed",
+                "eventType", "FlightDisruptionReported").count()).isEqualTo(1.0);
+        assertThat(meterRegistry.counter("aeronex.disruption.events.processed",
+                "eventType", "FlightDisruptionResolved").count()).isEqualTo(1.0);
+        assertThat(meterRegistry.counter("aeronex.outbox.publish",
+                "topic", KafkaTopics.DISRUPTION_REPORTED, "result", "success").count()).isEqualTo(1.0);
+        assertThat(meterRegistry.counter("aeronex.outbox.publish",
+                "topic", KafkaTopics.DISRUPTION_RESOLVED, "result", "success").count()).isEqualTo(1.0);
+
+        assertThat(kafkaHealthIndicator.health().getStatus()).isEqualTo(Status.UP);
     }
 
     private List<DisruptionEventLog> awaitLogEntries(UUID disruptionId, int expectedCount) throws InterruptedException {

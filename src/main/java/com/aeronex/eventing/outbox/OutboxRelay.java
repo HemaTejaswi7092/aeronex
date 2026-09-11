@@ -12,6 +12,9 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+
 @Component
 @ConditionalOnProperty(name = "aeronex.outbox.relay.enabled", havingValue = "true", matchIfMissing = true)
 public class OutboxRelay {
@@ -20,10 +23,13 @@ public class OutboxRelay {
 
     private final OutboxEventRepository outboxEventRepository;
     private final KafkaTemplate<String, String> kafkaTemplate;
+    private final MeterRegistry meterRegistry;
 
-    public OutboxRelay(OutboxEventRepository outboxEventRepository, KafkaTemplate<String, String> kafkaTemplate) {
+    public OutboxRelay(OutboxEventRepository outboxEventRepository, KafkaTemplate<String, String> kafkaTemplate,
+                        MeterRegistry meterRegistry) {
         this.outboxEventRepository = outboxEventRepository;
         this.kafkaTemplate = kafkaTemplate;
+        this.meterRegistry = meterRegistry;
     }
 
     @Scheduled(fixedDelay = 1000)
@@ -40,9 +46,19 @@ public class OutboxRelay {
             kafkaTemplate.send(event.getTopic(), event.getAggregateId().toString(), event.getPayload())
                     .get(5, TimeUnit.SECONDS);
             event.markPublished(Instant.now());
+            publishCounter(event.getTopic(), "success").increment();
         } catch (Exception e) {
             log.warn("Failed to publish outbox event {} ({}) to topic {}: {}",
                     event.getId(), event.getEventType(), event.getTopic(), e.getMessage());
+            publishCounter(event.getTopic(), "failure").increment();
         }
+    }
+
+    private Counter publishCounter(String topic, String result) {
+        return Counter.builder("aeronex.outbox.publish")
+                .description("Outbox events published to Kafka, by outcome")
+                .tag("topic", topic)
+                .tag("result", result)
+                .register(meterRegistry);
     }
 }

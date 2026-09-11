@@ -24,3 +24,14 @@ aeronex:
   outbox:
     relay:
       enabled: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, prometheus, metrics
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true

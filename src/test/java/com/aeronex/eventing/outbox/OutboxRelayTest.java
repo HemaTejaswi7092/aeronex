@@ -24,6 +24,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.SendResult;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+
 @ExtendWith(MockitoExtension.class)
 class OutboxRelayTest {
 
@@ -33,11 +35,14 @@ class OutboxRelayTest {
     @Mock
     private KafkaTemplate<String, String> kafkaTemplate;
 
+    private SimpleMeterRegistry meterRegistry;
+
     private OutboxRelay outboxRelay;
 
     @BeforeEach
     void setUp() {
-        outboxRelay = new OutboxRelay(outboxEventRepository, kafkaTemplate);
+        meterRegistry = new SimpleMeterRegistry();
+        outboxRelay = new OutboxRelay(outboxEventRepository, kafkaTemplate, meterRegistry);
     }
 
     private OutboxEvent pendingEvent(String topic) {
@@ -58,6 +63,9 @@ class OutboxRelayTest {
 
         verify(kafkaTemplate, times(1)).send(event.getTopic(), event.getAggregateId().toString(), event.getPayload());
         assertThat(event.getPublishedAt()).isNotNull();
+        assertThat(meterRegistry.counter("aeronex.outbox.publish", "topic", event.getTopic(), "result", "success")
+                .count()).isEqualTo(1.0);
+        assertThat(meterRegistry.find("aeronex.outbox.publish").tag("result", "failure").counter()).isNull();
     }
 
     @Test
@@ -74,6 +82,9 @@ class OutboxRelayTest {
         outboxRelay.publishPendingEvents();
 
         assertThat(event.getPublishedAt()).isNull();
+        assertThat(meterRegistry.counter("aeronex.outbox.publish", "topic", event.getTopic(), "result", "failure")
+                .count()).isEqualTo(1.0);
+        assertThat(meterRegistry.find("aeronex.outbox.publish").tag("result", "success").counter()).isNull();
     }
 
     @Test

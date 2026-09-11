@@ -22,6 +22,8 @@ import com.aeronex.disruption.DisruptionEventLogRepository;
 import com.aeronex.eventing.idempotency.IdempotentEventGuard;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+
 @ExtendWith(MockitoExtension.class)
 class DisruptionEventProcessorTest {
 
@@ -31,12 +33,15 @@ class DisruptionEventProcessorTest {
     @Mock
     private DisruptionEventLogRepository disruptionEventLogRepository;
 
+    private SimpleMeterRegistry meterRegistry;
+
     private DisruptionEventProcessor processor;
 
     @BeforeEach
     void setUp() {
+        meterRegistry = new SimpleMeterRegistry();
         processor = new DisruptionEventProcessor(idempotentEventGuard, disruptionEventLogRepository,
-                new ObjectMapper().findAndRegisterModules());
+                new ObjectMapper().findAndRegisterModules(), meterRegistry);
     }
 
     private String envelopeJson(UUID eventId, UUID disruptionId, UUID flightId, String eventType) {
@@ -75,6 +80,11 @@ class DisruptionEventProcessorTest {
         assertThat(captor.getValue().getSummary()).contains("AA100");
 
         verify(idempotentEventGuard).markProcessed(eventId, DisruptionEventProcessor.CONSUMER_NAME);
+
+        assertThat(meterRegistry.counter("aeronex.disruption.events.processed",
+                "eventType", "FlightDisruptionReported").count()).isEqualTo(1.0);
+        assertThat(meterRegistry.find("aeronex.disruption.events.duplicate").counter()).isNull();
+        assertThat(meterRegistry.find("aeronex.disruption.events.failed").counter()).isNull();
     }
 
     @Test
@@ -88,6 +98,10 @@ class DisruptionEventProcessorTest {
 
         verify(disruptionEventLogRepository, never()).save(any());
         verify(idempotentEventGuard, never()).markProcessed(any(), any());
+
+        assertThat(meterRegistry.counter("aeronex.disruption.events.duplicate",
+                "eventType", "FlightDisruptionReported").count()).isEqualTo(1.0);
+        assertThat(meterRegistry.find("aeronex.disruption.events.processed").counter()).isNull();
     }
 
     @Test
@@ -96,6 +110,8 @@ class DisruptionEventProcessorTest {
             processor.process("not-json");
         } catch (IllegalArgumentException expected) {
             verify(disruptionEventLogRepository, times(0)).save(any());
+            assertThat(meterRegistry.counter("aeronex.disruption.events.failed",
+                    "eventType", "unknown").count()).isEqualTo(1.0);
             return;
         }
         throw new AssertionError("Expected IllegalArgumentException for malformed payload");
