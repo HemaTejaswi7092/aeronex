@@ -48,6 +48,8 @@ class AircraftControllerIntegrationTest {
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.registrationNumber").value("N12345"))
                 .andExpect(jsonPath("$.status").value("ACTIVE"))
+                .andExpect(jsonPath("$.createdAt").exists())
+                .andExpect(jsonPath("$.updatedAt").exists())
                 .andReturn().getResponse().getContentAsString();
 
         JsonNode node = objectMapper.readTree(responseBody);

@@ -45,7 +45,7 @@ public class AirportService {
         );
 
         try {
-            Airport saved = airportRepository.save(airport);
+            Airport saved = airportRepository.saveAndFlush(airport);
             return AirportMapper.toResponse(saved);
         } catch (DataIntegrityViolationException e) {
             throw new DuplicateAirportCodeException(

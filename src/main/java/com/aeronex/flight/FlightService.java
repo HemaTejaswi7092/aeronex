@@ -79,7 +79,7 @@ public class FlightService {
                 status
         );
 
-        Flight saved = flightRepository.save(flight);
+        Flight saved = flightRepository.saveAndFlush(flight);
         return FlightMapper.toResponse(saved);
     }
 

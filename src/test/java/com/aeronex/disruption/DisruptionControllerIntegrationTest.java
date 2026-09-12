@@ -1,5 +1,6 @@
 package com.aeronex.disruption;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasSize;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
@@ -94,6 +95,8 @@ class DisruptionControllerIntegrationTest {
                 .andExpect(jsonPath("$.flight.destinationIataCode").value("LAX"))
                 .andExpect(jsonPath("$.flight.status").value("SCHEDULED"))
                 .andExpect(jsonPath("$.reportedAt").exists())
+                .andExpect(jsonPath("$.createdAt").exists())
+                .andExpect(jsonPath("$.updatedAt").exists())
                 .andReturn().getResponse().getContentAsString();
 
         JsonNode node = objectMapper.readTree(responseBody);
@@ -124,12 +127,20 @@ class DisruptionControllerIntegrationTest {
                 .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
 
-        String id = objectMapper.readTree(responseBody).get("id").asText();
+        JsonNode createdNode = objectMapper.readTree(responseBody);
+        String id = createdNode.get("id").asText();
+        String createdUpdatedAt = createdNode.get("updatedAt").asText();
 
-        mockMvc.perform(patch("/api/disruptions/" + id + "/resolve"))
+        String resolvedBody = mockMvc.perform(patch("/api/disruptions/" + id + "/resolve"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("RESOLVED"))
-                .andExpect(jsonPath("$.resolvedAt").exists());
+                .andExpect(jsonPath("$.resolvedAt").exists())
+                .andReturn().getResponse().getContentAsString();
+
+        // updatedAt must reflect the resolve itself, not a stale pre-flush snapshot
+        // from before the UPDATE statement actually ran.
+        String resolvedUpdatedAt = objectMapper.readTree(resolvedBody).get("updatedAt").asText();
+        assertThat(resolvedUpdatedAt).isNotEqualTo(createdUpdatedAt);
 
         mockMvc.perform(get("/api/disruptions/active"))
                 .andExpect(status().isOk())

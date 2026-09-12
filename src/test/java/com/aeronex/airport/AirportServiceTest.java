@@ -43,7 +43,7 @@ class AirportServiceTest {
     void createNormalizesCodesToUppercase() {
         when(airportRepository.existsByIataCode("JFK")).thenReturn(false);
         when(airportRepository.existsByIcaoCode("KJFK")).thenReturn(false);
-        when(airportRepository.save(any(Airport.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(airportRepository.saveAndFlush(any(Airport.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         AirportResponse response = airportService.create(sampleRequest());
 

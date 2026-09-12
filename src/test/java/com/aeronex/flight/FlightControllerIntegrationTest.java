@@ -84,6 +84,8 @@ class FlightControllerIntegrationTest {
                 .andExpect(jsonPath("$.originAirport.iataCode").value("JFK"))
                 .andExpect(jsonPath("$.destinationAirport.iataCode").value("LAX"))
                 .andExpect(jsonPath("$.aircraft.registrationNumber").value("N12345"))
+                .andExpect(jsonPath("$.createdAt").exists())
+                .andExpect(jsonPath("$.updatedAt").exists())
                 .andReturn().getResponse().getContentAsString();
 
         JsonNode node = objectMapper.readTree(responseBody);

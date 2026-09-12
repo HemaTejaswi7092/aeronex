@@ -39,7 +39,7 @@ class AircraftServiceTest {
     @Test
     void createNormalizesRegistrationNumberToUppercase() {
         when(aircraftRepository.existsByRegistrationNumber("N12345")).thenReturn(false);
-        when(aircraftRepository.save(any(Aircraft.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(aircraftRepository.saveAndFlush(any(Aircraft.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         AircraftResponse response = aircraftService.create(sampleRequest(AircraftStatus.ACTIVE));
 
@@ -49,7 +49,7 @@ class AircraftServiceTest {
     @Test
     void createDefaultsStatusToActiveWhenNotProvided() {
         when(aircraftRepository.existsByRegistrationNumber("N12345")).thenReturn(false);
-        when(aircraftRepository.save(any(Aircraft.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(aircraftRepository.saveAndFlush(any(Aircraft.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         AircraftResponse response = aircraftService.create(sampleRequest(null));
 
@@ -59,7 +59,7 @@ class AircraftServiceTest {
     @Test
     void createPreservesExplicitStatus() {
         when(aircraftRepository.existsByRegistrationNumber("N12345")).thenReturn(false);
-        when(aircraftRepository.save(any(Aircraft.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(aircraftRepository.saveAndFlush(any(Aircraft.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         AircraftResponse response = aircraftService.create(sampleRequest(AircraftStatus.MAINTENANCE));
 

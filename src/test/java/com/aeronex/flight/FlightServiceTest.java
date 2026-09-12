@@ -76,7 +76,7 @@ class FlightServiceTest {
     void createNormalizesFlightNumberAndDefaultsStatus() {
         when(airportRepository.findById(originId)).thenReturn(Optional.of(airportWithId(originId, "JFK")));
         when(airportRepository.findById(destinationId)).thenReturn(Optional.of(airportWithId(destinationId, "LAX")));
-        when(flightRepository.save(any(Flight.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(flightRepository.saveAndFlush(any(Flight.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         FlightResponse response = flightService.create(validRequest(originId, destinationId, null));
 
@@ -93,7 +93,7 @@ class FlightServiceTest {
         when(airportRepository.findById(destinationId)).thenReturn(Optional.of(airportWithId(destinationId, "LAX")));
         when(aircraftRepository.findById(aircraftId))
                 .thenReturn(Optional.of(aircraftWithId(aircraftId, AircraftStatus.ACTIVE)));
-        when(flightRepository.save(any(Flight.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(flightRepository.saveAndFlush(any(Flight.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         FlightResponse response = flightService.create(validRequest(originId, destinationId, aircraftId));
 

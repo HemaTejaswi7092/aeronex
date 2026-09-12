@@ -84,7 +84,7 @@ class DisruptionServiceTest {
     @Test
     void createDefaultsReportedAtAndStatusWhenOmitted() {
         when(flightRepository.findById(flightId)).thenReturn(Optional.of(flightWithStatus(FlightStatus.SCHEDULED)));
-        when(disruptionRepository.save(any(Disruption.class)))
+        when(disruptionRepository.saveAndFlush(any(Disruption.class)))
                 .thenAnswer(invocation -> withGeneratedId(invocation.getArgument(0)));
 
         DisruptionResponse response = disruptionService.create(validRequest(null, null, null));
@@ -137,7 +137,7 @@ class DisruptionServiceTest {
     @Test
     void createAutoSetsResolvedAtWhenStatusResolvedAndResolvedAtOmitted() {
         when(flightRepository.findById(flightId)).thenReturn(Optional.of(flightWithStatus(FlightStatus.SCHEDULED)));
-        when(disruptionRepository.save(any(Disruption.class)))
+        when(disruptionRepository.saveAndFlush(any(Disruption.class)))
                 .thenAnswer(invocation -> withGeneratedId(invocation.getArgument(0)));
 
         DisruptionResponse response = disruptionService.create(
@@ -190,7 +190,7 @@ class DisruptionServiceTest {
         ReflectionTestUtils.setField(disruption, "id", id);
 
         when(disruptionRepository.findById(id)).thenReturn(Optional.of(disruption));
-        when(disruptionRepository.save(any(Disruption.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(disruptionRepository.saveAndFlush(any(Disruption.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         DisruptionResponse response = disruptionService.resolve(id);
 
@@ -211,7 +211,7 @@ class DisruptionServiceTest {
         ReflectionTestUtils.setField(disruption, "id", id);
 
         when(disruptionRepository.findById(id)).thenReturn(Optional.of(disruption));
-        when(disruptionRepository.save(any(Disruption.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(disruptionRepository.saveAndFlush(any(Disruption.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         DisruptionResponse response = disruptionService.resolve(id);
 

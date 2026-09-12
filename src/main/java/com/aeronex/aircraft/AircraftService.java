@@ -40,7 +40,7 @@ public class AircraftService {
         );
 
         try {
-            Aircraft saved = aircraftRepository.save(aircraft);
+            Aircraft saved = aircraftRepository.saveAndFlush(aircraft);
             return AircraftMapper.toResponse(saved);
         } catch (DataIntegrityViolationException e) {
             throw new DuplicateRegistrationNumberException(

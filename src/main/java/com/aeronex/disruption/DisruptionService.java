@@ -75,7 +75,7 @@ public class DisruptionService {
                 resolvedAt
         );
 
-        Disruption saved = disruptionRepository.save(disruption);
+        Disruption saved = disruptionRepository.saveAndFlush(disruption);
 
         publishReportedEvent(saved);
         if (saved.getStatus() == DisruptionStatus.RESOLVED) {
@@ -118,7 +118,7 @@ public class DisruptionService {
         boolean wasAlreadyResolved = disruption.getStatus() == DisruptionStatus.RESOLVED;
         disruption.resolve(OffsetDateTime.now());
 
-        Disruption saved = disruptionRepository.save(disruption);
+        Disruption saved = disruptionRepository.saveAndFlush(disruption);
 
         if (!wasAlreadyResolved) {
             publishResolvedEvent(saved);
