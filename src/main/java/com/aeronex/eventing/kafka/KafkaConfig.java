@@ -2,11 +2,14 @@ package com.aeronex.eventing.kafka;
 
 import java.util.Map;
 
+import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.kafka.KafkaProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.config.TopicBuilder;
 import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
@@ -20,6 +23,28 @@ import org.springframework.util.backoff.ExponentialBackOff;
 
 @Configuration
 public class KafkaConfig {
+
+    /**
+     * Explicit, idempotent topic declarations so startup doesn't depend on a broker's
+     * {@code auto.create.topics.enable} default. Spring's {@code KafkaAdmin} provisions
+     * these automatically and tolerates them already existing.
+     *
+     * <p>Gated by the same flag as {@link com.aeronex.eventing.outbox.OutboxRelay} and
+     * {@link KafkaHealthIndicator} — declaring a {@code NewTopic} bean makes
+     * {@code KafkaAdmin} attempt a real broker connection at context startup, which the
+     * standard test suite must never depend on.
+     */
+    @Bean
+    @ConditionalOnProperty(name = "aeronex.outbox.relay.enabled", havingValue = "true", matchIfMissing = true)
+    public NewTopic disruptionReportedTopic() {
+        return TopicBuilder.name(KafkaTopics.DISRUPTION_REPORTED).partitions(1).replicas(1).build();
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "aeronex.outbox.relay.enabled", havingValue = "true", matchIfMissing = true)
+    public NewTopic disruptionResolvedTopic() {
+        return TopicBuilder.name(KafkaTopics.DISRUPTION_RESOLVED).partitions(1).replicas(1).build();
+    }
 
     @Bean
     public ProducerFactory<String, String> producerFactory(KafkaProperties kafkaProperties) {
