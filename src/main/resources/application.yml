@@ -35,6 +35,15 @@ aeronex:
   outbox:
     relay:
       enabled: true
+  security:
+    jwt:
+      # No fallback default — a missing AERONEX_JWT_SECRET must fail startup,
+      # not silently sign tokens with a well-known published value.
+      secret: ${AERONEX_JWT_SECRET}
+      expiration-minutes: ${AERONEX_JWT_EXPIRATION_MINUTES:60}
+    admin:
+      username: ${AERONEX_ADMIN_USERNAME:admin}
+      password: ${AERONEX_ADMIN_PASSWORD:admin123}
 
 management:
   endpoints:

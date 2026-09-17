@@ -24,6 +24,13 @@ aeronex:
   outbox:
     relay:
       enabled: false
+  security:
+    jwt:
+      secret: test-only-jwt-secret-not-used-outside-the-test-suite-32bytes-minimum
+      expiration-minutes: 60
+    admin:
+      username: admin
+      password: admin123
 
 management:
   endpoints:

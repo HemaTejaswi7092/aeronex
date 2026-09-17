@@ -105,10 +105,13 @@ docker compose down -v
 local DB client), `9092` (Kafka, for connecting a local Kafka CLI — the broker
 advertises `localhost:9092` to host tools and `kafka:29092` to other containers).
 
-**Configuration:** credentials default to `aeronex`/`aeronex`/`aeronex`
+**Configuration:** database credentials default to `aeronex`/`aeronex`/`aeronex`
 (database/user/password) — fine for local dev, matching what this README has
-always documented. To override, copy `.env.example` to `.env` and adjust;
-`.env` is gitignored and Compose loads it automatically.
+always documented. `AERONEX_JWT_SECRET` is different: it has **no default** —
+both the app and Docker Compose refuse to start without it set, so it can
+never be silently signing tokens with a known value. Copy `.env.example` to
+`.env` and adjust as needed; `.env` is gitignored and Compose loads it
+automatically.
 
 ## Running without Docker
 

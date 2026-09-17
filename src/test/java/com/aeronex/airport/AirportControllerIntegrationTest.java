@@ -13,6 +13,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
+import org.springframework.security.test.context.support.WithAnonymousUser;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,6 +24,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 @SpringBootTest
 @AutoConfigureMockMvc
 @Transactional
+@WithMockUser(roles = "ADMIN")
 class AirportControllerIntegrationTest {
 
     @Autowired
@@ -108,5 +111,30 @@ class AirportControllerIntegrationTest {
     void getByIataCodeReturnsNotFoundWhenMissing() throws Exception {
         mockMvc.perform(get("/api/airports/iata/zzz"))
                 .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @WithAnonymousUser
+    void createWithoutAuthenticationReturnsUnauthorized() throws Exception {
+        mockMvc.perform(post("/api/airports")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(VALID_AIRPORT_JSON))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @WithMockUser(roles = "VIEWER")
+    void createWithViewerRoleReturnsForbidden() throws Exception {
+        mockMvc.perform(post("/api/airports")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(VALID_AIRPORT_JSON))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @WithAnonymousUser
+    void getWithoutAuthenticationReturnsUnauthorized() throws Exception {
+        mockMvc.perform(get("/api/airports"))
+                .andExpect(status().isUnauthorized());
     }
 }

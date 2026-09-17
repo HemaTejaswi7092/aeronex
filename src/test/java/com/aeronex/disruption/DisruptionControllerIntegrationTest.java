@@ -18,6 +18,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
+import org.springframework.security.test.context.support.WithAnonymousUser;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -32,6 +34,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 @SpringBootTest
 @AutoConfigureMockMvc
 @Transactional
+@WithMockUser(roles = "OPS")
 class DisruptionControllerIntegrationTest {
 
     @Autowired
@@ -211,5 +214,30 @@ class DisruptionControllerIntegrationTest {
     void resolveNonexistentDisruptionReturnsNotFound() throws Exception {
         mockMvc.perform(patch("/api/disruptions/" + UUID.randomUUID() + "/resolve"))
                 .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @WithAnonymousUser
+    void createWithoutAuthenticationReturnsUnauthorized() throws Exception {
+        mockMvc.perform(post("/api/disruptions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(validDisruptionJson(scheduledFlight.getId())))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @WithMockUser(roles = "VIEWER")
+    void createWithViewerRoleReturnsForbidden() throws Exception {
+        mockMvc.perform(post("/api/disruptions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(validDisruptionJson(scheduledFlight.getId())))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @WithMockUser(roles = "VIEWER")
+    void resolveWithViewerRoleReturnsForbidden() throws Exception {
+        mockMvc.perform(patch("/api/disruptions/" + UUID.randomUUID() + "/resolve"))
+                .andExpect(status().isForbidden());
     }
 }

@@ -15,6 +15,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
+import org.springframework.security.test.context.support.WithAnonymousUser;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -29,6 +31,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 @SpringBootTest
 @AutoConfigureMockMvc
 @Transactional
+@WithMockUser(roles = "OPS")
 class FlightControllerIntegrationTest {
 
     @Autowired
@@ -194,5 +197,38 @@ class FlightControllerIntegrationTest {
     void getByIdReturnsNotFoundWhenMissing() throws Exception {
         mockMvc.perform(get("/api/flights/" + UUID.randomUUID()))
                 .andExpect(status().isNotFound());
+    }
+
+    private String validFlightJson() {
+        return """
+                {
+                  "flightNumber": "AA100",
+                  "originAirportId": "%s",
+                  "destinationAirportId": "%s",
+                  "scheduledDepartureTime": "2026-06-01T10:00:00-04:00",
+                  "scheduledArrivalTime": "2026-06-01T13:00:00-04:00"
+                }
+                """.formatted(jfk.getId(), lax.getId());
+    }
+
+    @Test
+    @WithAnonymousUser
+    void createWithoutAuthenticationReturnsUnauthorized() throws Exception {
+        mockMvc.perform(post("/api/flights").contentType(MediaType.APPLICATION_JSON).content(validFlightJson()))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @WithMockUser(roles = "VIEWER")
+    void createWithViewerRoleReturnsForbidden() throws Exception {
+        mockMvc.perform(post("/api/flights").contentType(MediaType.APPLICATION_JSON).content(validFlightJson()))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void createWithAdminRoleSucceeds() throws Exception {
+        mockMvc.perform(post("/api/flights").contentType(MediaType.APPLICATION_JSON).content(validFlightJson()))
+                .andExpect(status().isCreated());
     }
 }

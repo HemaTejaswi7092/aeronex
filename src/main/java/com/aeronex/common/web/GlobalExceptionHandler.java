@@ -5,6 +5,7 @@ import java.util.Map;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -20,6 +21,7 @@ import com.aeronex.disruption.exception.InvalidDisruptionException;
 import com.aeronex.flight.exception.AircraftNotAvailableException;
 import com.aeronex.flight.exception.FlightNotFoundException;
 import com.aeronex.flight.exception.InvalidFlightException;
+import com.aeronex.user.exception.DuplicateUsernameException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -83,6 +85,18 @@ public class GlobalExceptionHandler {
             FlightNotEligibleForDisruptionException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(ErrorResponse.of(HttpStatus.CONFLICT, ex.getMessage()));
+    }
+
+    @ExceptionHandler(DuplicateUsernameException.class)
+    public ResponseEntity<ErrorResponse> handleDuplicateUsername(DuplicateUsernameException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of(HttpStatus.CONFLICT, ex.getMessage()));
+    }
+
+    @ExceptionHandler(AuthenticationException.class)
+    public ResponseEntity<ErrorResponse> handleAuthenticationException(AuthenticationException ex) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(ErrorResponse.of(HttpStatus.UNAUTHORIZED, "Invalid username or password"));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
