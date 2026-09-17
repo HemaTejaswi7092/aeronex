@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      # mvn's package phase depends on compile and test, in that order, so a
+      # single invocation gates on clean compilation, the full test suite (which
+      # already runs all Flyway migrations against H2 in PostgreSQL-compat mode
+      # via src/test/resources/application.yml), and the final jar build.
+      - name: Build, test, and package
+        run: mvn -B -ntp clean package
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: target/surefire-reports/**
+          retention-days: 7
+          if-no-files-found: ignore
+
+  docker-integration-smoke:
+    needs: build-test-package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # Not a real secret: this value protects nothing beyond an ephemeral CI
+      # container, is never reused anywhere else, and must NOT be a GitHub
+      # Actions secret — that would withhold it from pull_request runs
+      # triggered from forks and break this job's ability to build/verify.
+      AERONEX_JWT_SECRET: ci-only-non-secret-placeholder-32bytes-minimum-do-not-reuse
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build stack
+        run: docker compose build
+
+      - name: Start stack
+        run: docker compose up -d
+
+      - name: Wait for app to become healthy
+        run: |
+          for _ in $(seq 1 30); do
+            status=$(docker inspect --format='{{.State.Health.Status}}' aeronex-aeronex-app-1 2>/dev/null || echo starting)
+            if [ "$status" = "healthy" ]; then
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "app never became healthy" >&2
+          exit 1
+
+      - name: Smoke test authentication and authorization
+        run: |
+          set -e
+
+          # Login as the auto-bootstrapped ADMIN account and confirm a token is issued.
+          token=$(curl -sf -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"admin123"}' | jq -r .token)
+          if [ -z "$token" ] || [ "$token" = "null" ]; then
+            echo "login did not return a token" >&2
+            exit 1
+          fi
+
+          # A valid token must be accepted on a protected endpoint.
+          curl -sf http://localhost:8080/api/users/me -H "Authorization: Bearer $token" > /dev/null
+
+          # The same endpoint must reject an unauthenticated request.
+          status=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/users/me)
+          if [ "$status" != "401" ]; then
+            echo "expected 401 for unauthenticated request, got $status" >&2
+            exit 1
+          fi
+
+      - name: Verify JWT fail-fast startup guard
+        run: |
+          set -e
+
+          # Bypass Compose's own mandatory-variable guard and run the built image
+          # directly with a blank secret: the app must refuse to start, and the
+          # failure must name the configuration key, never a token/secret value.
+          if docker run --rm --network aeronex_default \
+              -e SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/aeronex \
+              -e SPRING_DATASOURCE_USERNAME=aeronex \
+              -e SPRING_DATASOURCE_PASSWORD=aeronex \
+              -e SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:29092 \
+              -e AERONEX_JWT_SECRET= \
+              aeronex-aeronex-app > /tmp/blank-secret.log 2>&1; then
+            echo "container started with a blank AERONEX_JWT_SECRET; expected it to fail" >&2
+            cat /tmp/blank-secret.log
+            exit 1
+          fi
+          grep -q "AERONEX_JWT_SECRET" /tmp/blank-secret.log
+
+      - name: Dump container logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

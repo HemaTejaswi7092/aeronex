@@ -1,5 +1,7 @@
 # AeroNex
 
+[![CI](https://github.com/HemaTejaswi7092/aeronex/actions/workflows/ci.yml/badge.svg)](https://github.com/HemaTejaswi7092/aeronex/actions/workflows/ci.yml)
+
 A real-time airline operations and disruption-recovery backend. Tracks airports,
 aircraft, and scheduled flights; records and resolves operational disruptions;
 and propagates disruption events through Kafka via a transactional outbox, with
@@ -157,6 +159,32 @@ mvn clean package
 
 Produces an executable jar in `target/`. `docker compose build` produces the
 containerized equivalent via the multi-stage `Dockerfile`.
+
+## Continuous integration
+
+Every push to `main` and every pull request into it runs `.github/workflows/ci.yml`,
+two sequential jobs:
+
+1. **`build-test-package`** — `mvn clean package` on Java 21 (Maven dependency
+   cache via `actions/setup-java`). Maven's `package` phase depends on `compile`
+   and `test`, so this single command gates on clean compilation, the full
+   122-test suite, and the jar build, in that order. The test suite needs no
+   external services: it runs against an in-memory H2 database in
+   PostgreSQL-compatibility mode, applying all Flyway migrations on every run.
+   Surefire reports are uploaded as a build artifact on every run (pass or fail).
+2. **`docker-integration-smoke`** (only runs if the first job passes) — builds
+   the real multi-stage Docker image, brings up the full stack (Postgres, Kafka,
+   app) via Compose, and verifies: the app reports healthy; login issues a JWT;
+   the token is accepted on a protected endpoint; the same endpoint rejects an
+   unauthenticated request with `401`; and a container started with a blank
+   `AERONEX_JWT_SECRET` refuses to start, per the fail-fast guard. Container
+   logs are dumped on failure, and the stack is always torn down afterward.
+
+Both jobs run with least-privilege permissions (`contents: read`) and no
+GitHub Actions secrets — nothing genuinely sensitive is required to build or
+smoke-test this project, so the CI-only JWT secret and dev DB credentials are
+plain, clearly-labeled placeholder values, matching `.env.example`. Superseded
+runs on the same branch/PR are automatically cancelled.
 
 ## Project structure
 
