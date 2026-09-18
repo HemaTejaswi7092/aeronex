@@ -1,0 +1,12 @@
+# ClusterIP (the default type). No Ingress/TLS/NodePort yet — access is via
+# `kubectl port-forward` for local verification.
+apiVersion: v1
+kind: Service
+metadata:
+  name: aeronex-app
+spec:
+  selector:
+    app: aeronex-app
+  ports:
+    - port: 8080
+      targetPort: 8080

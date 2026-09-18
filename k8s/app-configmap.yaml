@@ -1,0 +1,13 @@
+# Non-secret configuration shared by the postgres and aeronex-app workloads.
+# Mirrors the plain (non-secret) values already used in docker-compose.yml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aeronex-config
+data:
+  POSTGRES_DB: aeronex
+  POSTGRES_USER: aeronex
+  SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/aeronex
+  SPRING_DATASOURCE_USERNAME: aeronex
+  SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+  AERONEX_ADMIN_USERNAME: admin

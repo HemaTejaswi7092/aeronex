@@ -1,0 +1,94 @@
+# The AeroNex app itself. Single replica, matching the existing architecture:
+# the outbox relay's @Scheduled poller has no distributed lock, so running more
+# than one replica would risk double-publishing outbox events. Scaling this
+# safely is out of scope for this milestone.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aeronex-app
+  labels:
+    app: aeronex-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aeronex-app
+  template:
+    metadata:
+      labels:
+        app: aeronex-app
+    spec:
+      # No image registry yet: this image is built locally and loaded directly
+      # into the kind node, so it must never attempt a registry pull.
+      initContainers:
+        # Kubernetes Deployments have no native equivalent of Compose's
+        # depends_on: condition: service_healthy. These block the app container
+        # from starting until Postgres and Kafka are actually reachable, instead
+        # of relying on the app's own crash-loop-and-retry to eventually catch up.
+        - name: wait-for-postgres
+          image: postgres:16-alpine
+          command:
+            - sh
+            - -c
+            - until pg_isready -h postgres -p 5432 -U aeronex; do echo waiting for postgres; sleep 2; done
+        - name: wait-for-kafka
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - until nc -z kafka 29092; do echo waiting for kafka; sleep 2; done
+      containers:
+        - name: aeronex-app
+          image: aeronex-aeronex-app:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: aeronex-config
+          env:
+            # Mandatory, no fallback — matches the fail-fast guard in JwtService
+            # and application.yml. A missing/blank value must stop the pod from
+            # ever becoming ready, never silently sign tokens with a known value.
+            - name: AERONEX_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: aeronex-secrets
+                  key: jwt-secret
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: aeronex-secrets
+                  key: postgres-password
+            - name: AERONEX_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: aeronex-secrets
+                  key: admin-password
+          # Splits the single Docker HEALTHCHECK into Kubernetes' native
+          # startup/readiness/liveness probes, reusing the same Actuator
+          # endpoints the observability milestone built for exactly this.
+          startupProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+      # Slightly more than spring.lifecycle.timeout-per-shutdown-phase (20s) so
+      # server.shutdown: graceful has time to finish before Kubernetes SIGKILLs
+      # the process.
+      terminationGracePeriodSeconds: 30

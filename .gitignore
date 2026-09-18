@@ -34,3 +34,4 @@ target/
 
 ### Environment ###
 .env
+k8s/secret.yaml

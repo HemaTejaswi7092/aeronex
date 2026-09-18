@@ -115,6 +115,56 @@ never be silently signing tokens with a known value. Copy `.env.example` to
 `.env` and adjust as needed; `.env` is gitignored and Compose loads it
 automatically.
 
+## Running on Kubernetes
+
+Plain manifests under `k8s/` (no Helm, no Kustomize) deploy the same
+architecture as Docker Compose — development-grade Postgres and Kafka
+(single replica each, PVC-backed, no HA) alongside the app — to a local
+[kind](https://kind.sigs.k8s.io/) cluster. No image registry is used: the
+existing image is built locally and loaded directly into the cluster node.
+
+```bash
+kind create cluster --name aeronex
+docker build -t aeronex-aeronex-app:latest .
+kind load docker-image aeronex-aeronex-app:latest --name aeronex
+
+cp k8s/secret.yaml.example k8s/secret.yaml   # edit with real local-dev values; never commit this file
+kubectl apply -f k8s/app-configmap.yaml -f k8s/secret.yaml
+kubectl apply -f k8s/postgres-pvc.yaml -f k8s/kafka-pvc.yaml
+kubectl apply -f k8s/postgres-deployment.yaml -f k8s/postgres-service.yaml
+kubectl apply -f k8s/kafka-deployment.yaml -f k8s/kafka-service.yaml
+kubectl apply -f k8s/app-deployment.yaml -f k8s/app-service.yaml
+
+kubectl wait --for=condition=Ready pod -l app=aeronex-app --timeout=240s
+kubectl port-forward svc/aeronex-app 8080:8080
+```
+
+Notes on how this differs from Docker Compose, and why:
+
+- **No external exposure for Postgres/Kafka.** Both Services are `ClusterIP`
+  only; the app Service is also `ClusterIP`, reached locally via
+  `kubectl port-forward` — there's no Ingress/TLS yet.
+- **`initContainers` replace `depends_on: condition: service_healthy`.**
+  Kubernetes Deployments have no native equivalent, so the app pod's
+  `wait-for-postgres`/`wait-for-kafka` init containers block it from starting
+  until both are actually reachable.
+- **The app's Docker `HEALTHCHECK` becomes three native probes** —
+  `startupProbe`/`readinessProbe`/`livenessProbe` — reusing the same
+  `/actuator/health/readiness` and `/actuator/health/liveness` endpoints the
+  observability milestone already built for exactly this.
+- **Kafka's controller quorum voter points at `localhost`, not the Service
+  name.** This single-node broker and controller are the same process; routing
+  that self-registration RPC through the Service's ClusterIP hits a hairpin NAT
+  path some `kind` CNI setups don't reliably support. Compose doesn't hit this
+  because its embedded DNS resolves a container's own hostname with no NAT
+  involved.
+- **Single replica only.** The outbox relay's `@Scheduled` poller has no
+  distributed lock, so running more than one app replica risks double-publishing
+  outbox events — matching Compose's own single-instance posture.
+
+Not yet included: a container registry, wiring this into CI, Ingress/TLS, and
+autoscaling — all deliberately deferred to a later milestone.
+
 ## Running without Docker
 
 **Prerequisites:** JDK 21, Maven 3.9+, a local PostgreSQL instance, a local Kafka broker (optional — see below).
@@ -211,4 +261,5 @@ src/main/resources/
 Dockerfile                      Multi-stage build (Maven → slim non-root JRE)
 docker-compose.yml               Postgres + Kafka (KRaft) + app, health-gated startup
 .env.example                     Documents overridable local credentials
+k8s/                             Plain manifests for a local kind deployment
 ```
