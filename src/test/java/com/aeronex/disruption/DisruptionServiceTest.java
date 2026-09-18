@@ -9,6 +9,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
@@ -34,6 +35,8 @@ import com.aeronex.eventing.kafka.KafkaTopics;
 import com.aeronex.flight.Flight;
 import com.aeronex.flight.FlightRepository;
 import com.aeronex.flight.FlightStatus;
+import com.aeronex.flight.FlightStatusTransitionService;
+import com.aeronex.flight.TransitionSource;
 import com.aeronex.flight.exception.FlightNotFoundException;
 
 @ExtendWith(MockitoExtension.class)
@@ -47,6 +50,9 @@ class DisruptionServiceTest {
 
     @Mock
     private DomainEventPublisher domainEventPublisher;
+
+    @Mock
+    private FlightStatusTransitionService flightStatusTransitionService;
 
     private DisruptionService disruptionService;
 
@@ -71,6 +77,11 @@ class DisruptionServiceTest {
                 "Heavy snow at origin", 45, reportedAt, status, resolvedAt);
     }
 
+    private DisruptionCreateRequest requestWithSeverity(DisruptionSeverity severity) {
+        return new DisruptionCreateRequest(flightId, DisruptionType.MECHANICAL, severity,
+                "Engine inspection required", null, null, null, null);
+    }
+
     private Disruption withGeneratedId(Disruption disruption) {
         ReflectionTestUtils.setField(disruption, "id", UUID.randomUUID());
         return disruption;
@@ -78,7 +89,8 @@ class DisruptionServiceTest {
 
     @BeforeEach
     void setUp() {
-        disruptionService = new DisruptionService(disruptionRepository, flightRepository, domainEventPublisher);
+        disruptionService = new DisruptionService(disruptionRepository, flightRepository, domainEventPublisher,
+                flightStatusTransitionService);
     }
 
     @Test
@@ -98,6 +110,75 @@ class DisruptionServiceTest {
                 eq("FlightDisruptionReported"), eq(1), any());
         verify(domainEventPublisher, never()).publish(eq(KafkaTopics.DISRUPTION_RESOLVED), any(UUID.class),
                 anyString(), anyInt(), any());
+        verifyNoInteractions(flightStatusTransitionService);
+    }
+
+    @Test
+    void createAutoDelaysFlightWhenHighSeverityAndEligible() {
+        when(flightRepository.findById(flightId)).thenReturn(Optional.of(flightWithStatus(FlightStatus.SCHEDULED)));
+        when(disruptionRepository.saveAndFlush(any(Disruption.class)))
+                .thenAnswer(invocation -> withGeneratedId(invocation.getArgument(0)));
+
+        disruptionService.create(requestWithSeverity(DisruptionSeverity.HIGH));
+
+        verify(flightStatusTransitionService).apply(any(Flight.class), eq(FlightStatus.DELAYED),
+                eq(TransitionSource.DISRUPTION_AUTO), anyString());
+    }
+
+    @Test
+    void createAutoDelaysFlightWhenCriticalSeverityAndEligible() {
+        when(flightRepository.findById(flightId)).thenReturn(Optional.of(flightWithStatus(FlightStatus.BOARDING)));
+        when(disruptionRepository.saveAndFlush(any(Disruption.class)))
+                .thenAnswer(invocation -> withGeneratedId(invocation.getArgument(0)));
+
+        disruptionService.create(requestWithSeverity(DisruptionSeverity.CRITICAL));
+
+        verify(flightStatusTransitionService).apply(any(Flight.class), eq(FlightStatus.DELAYED),
+                eq(TransitionSource.DISRUPTION_AUTO), anyString());
+    }
+
+    @Test
+    void createDoesNotAutoDelayForLowSeverity() {
+        when(flightRepository.findById(flightId)).thenReturn(Optional.of(flightWithStatus(FlightStatus.SCHEDULED)));
+        when(disruptionRepository.saveAndFlush(any(Disruption.class)))
+                .thenAnswer(invocation -> withGeneratedId(invocation.getArgument(0)));
+
+        disruptionService.create(requestWithSeverity(DisruptionSeverity.LOW));
+
+        verifyNoInteractions(flightStatusTransitionService);
+    }
+
+    @Test
+    void createDoesNotAutoDelayForMediumSeverity() {
+        when(flightRepository.findById(flightId)).thenReturn(Optional.of(flightWithStatus(FlightStatus.SCHEDULED)));
+        when(disruptionRepository.saveAndFlush(any(Disruption.class)))
+                .thenAnswer(invocation -> withGeneratedId(invocation.getArgument(0)));
+
+        disruptionService.create(requestWithSeverity(DisruptionSeverity.MEDIUM));
+
+        verifyNoInteractions(flightStatusTransitionService);
+    }
+
+    @Test
+    void createDoesNotAutoDelayWhenFlightAlreadyDelayed() {
+        when(flightRepository.findById(flightId)).thenReturn(Optional.of(flightWithStatus(FlightStatus.DELAYED)));
+        when(disruptionRepository.saveAndFlush(any(Disruption.class)))
+                .thenAnswer(invocation -> withGeneratedId(invocation.getArgument(0)));
+
+        disruptionService.create(requestWithSeverity(DisruptionSeverity.HIGH));
+
+        verifyNoInteractions(flightStatusTransitionService);
+    }
+
+    @Test
+    void createDoesNotAutoDelayWhenFlightAlreadyDeparted() {
+        when(flightRepository.findById(flightId)).thenReturn(Optional.of(flightWithStatus(FlightStatus.DEPARTED)));
+        when(disruptionRepository.saveAndFlush(any(Disruption.class)))
+                .thenAnswer(invocation -> withGeneratedId(invocation.getArgument(0)));
+
+        disruptionService.create(requestWithSeverity(DisruptionSeverity.CRITICAL));
+
+        verifyNoInteractions(flightStatusTransitionService);
     }
 
     @Test
@@ -198,6 +279,7 @@ class DisruptionServiceTest {
         assertThat(response.resolvedAt()).isNotNull();
         verify(domainEventPublisher, times(1)).publish(eq(KafkaTopics.DISRUPTION_RESOLVED), any(UUID.class),
                 eq("FlightDisruptionResolved"), eq(1), any());
+        verifyNoInteractions(flightStatusTransitionService);
     }
 
     @Test
@@ -218,5 +300,6 @@ class DisruptionServiceTest {
         assertThat(response.resolvedAt()).isEqualTo(originalResolvedAt);
         verify(domainEventPublisher, never()).publish(eq(KafkaTopics.DISRUPTION_RESOLVED), any(UUID.class),
                 anyString(), anyInt(), any());
+        verifyNoInteractions(flightStatusTransitionService);
     }
 }

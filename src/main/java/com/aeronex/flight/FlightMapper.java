@@ -5,6 +5,7 @@ import com.aeronex.airport.Airport;
 import com.aeronex.flight.dto.AircraftSummary;
 import com.aeronex.flight.dto.AirportSummary;
 import com.aeronex.flight.dto.FlightResponse;
+import com.aeronex.flight.dto.FlightStatusHistoryResponse;
 
 final class FlightMapper {
 
@@ -25,6 +26,17 @@ final class FlightMapper {
                 flight.getStatus(),
                 flight.getCreatedAt(),
                 flight.getUpdatedAt()
+        );
+    }
+
+    static FlightStatusHistoryResponse toHistoryResponse(FlightStatusHistory history) {
+        return new FlightStatusHistoryResponse(
+                history.getId(),
+                history.getPreviousStatus(),
+                history.getNewStatus(),
+                history.getSource(),
+                history.getReason(),
+                history.getChangedAt()
         );
     }
 

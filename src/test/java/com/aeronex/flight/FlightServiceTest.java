@@ -3,10 +3,14 @@ package com.aeronex.flight;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -26,9 +30,12 @@ import com.aeronex.airport.AirportRepository;
 import com.aeronex.airport.exception.AirportNotFoundException;
 import com.aeronex.flight.dto.FlightCreateRequest;
 import com.aeronex.flight.dto.FlightResponse;
+import com.aeronex.flight.dto.FlightStatusHistoryResponse;
+import com.aeronex.flight.dto.FlightStatusUpdateRequest;
 import com.aeronex.flight.exception.AircraftNotAvailableException;
 import com.aeronex.flight.exception.FlightNotFoundException;
 import com.aeronex.flight.exception.InvalidFlightException;
+import com.aeronex.flight.exception.InvalidFlightStatusTransitionException;
 
 @ExtendWith(MockitoExtension.class)
 class FlightServiceTest {
@@ -41,6 +48,12 @@ class FlightServiceTest {
 
     @Mock
     private AircraftRepository aircraftRepository;
+
+    @Mock
+    private FlightStatusHistoryRepository flightStatusHistoryRepository;
+
+    @Mock
+    private FlightStatusTransitionService flightStatusTransitionService;
 
     private FlightService flightService;
 
@@ -67,9 +80,18 @@ class FlightServiceTest {
         return new FlightCreateRequest("aa100", origin, destination, aircraft, departure, arrival, null, null, null);
     }
 
+    private Flight flightWithId(UUID id, FlightStatus status) {
+        Flight flight = new Flight("AA100", airportWithId(originId, "JFK"), airportWithId(destinationId, "LAX"),
+                null, OffsetDateTime.parse("2026-06-01T10:00:00Z"), OffsetDateTime.parse("2026-06-01T13:00:00Z"),
+                null, null, status);
+        ReflectionTestUtils.setField(flight, "id", id);
+        return flight;
+    }
+
     @BeforeEach
     void setUp() {
-        flightService = new FlightService(flightRepository, airportRepository, aircraftRepository);
+        flightService = new FlightService(flightRepository, airportRepository, aircraftRepository,
+                flightStatusHistoryRepository, flightStatusTransitionService);
     }
 
     @Test
@@ -85,6 +107,7 @@ class FlightServiceTest {
         assertThat(response.originAirport().iataCode()).isEqualTo("JFK");
         assertThat(response.destinationAirport().iataCode()).isEqualTo("LAX");
         assertThat(response.aircraft()).isNull();
+        verify(flightStatusTransitionService).seedInitialHistory(any(Flight.class));
     }
 
     @Test
@@ -174,6 +197,85 @@ class FlightServiceTest {
         when(flightRepository.findById(id)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> flightService.findById(id))
+                .isInstanceOf(FlightNotFoundException.class);
+    }
+
+    @Test
+    void updateStatusDelegatesToTransitionServiceAndReturnsResult() {
+        UUID id = UUID.randomUUID();
+        Flight flight = flightWithId(id, FlightStatus.SCHEDULED);
+        Flight transitioned = flightWithId(id, FlightStatus.BOARDING);
+
+        when(flightRepository.findById(id)).thenReturn(Optional.of(flight));
+        when(flightStatusTransitionService.apply(flight, FlightStatus.BOARDING, TransitionSource.OPERATOR,
+                "Gate ready")).thenReturn(transitioned);
+
+        FlightResponse response = flightService.updateStatus(id,
+                new FlightStatusUpdateRequest(FlightStatus.BOARDING, "Gate ready"));
+
+        assertThat(response.status()).isEqualTo(FlightStatus.BOARDING);
+        verify(flightStatusTransitionService).apply(flight, FlightStatus.BOARDING, TransitionSource.OPERATOR,
+                "Gate ready");
+    }
+
+    @Test
+    void updateStatusThrowsWhenFlightNotFound() {
+        UUID id = UUID.randomUUID();
+        when(flightRepository.findById(id)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> flightService.updateStatus(id,
+                new FlightStatusUpdateRequest(FlightStatus.BOARDING, null)))
+                .isInstanceOf(FlightNotFoundException.class);
+
+        verifyNoInteractions(flightStatusTransitionService);
+    }
+
+    @Test
+    void updateStatusPropagatesInvalidTransitionFromTransitionService() {
+        UUID id = UUID.randomUUID();
+        Flight flight = flightWithId(id, FlightStatus.ARRIVED);
+
+        when(flightRepository.findById(id)).thenReturn(Optional.of(flight));
+        when(flightStatusTransitionService.apply(eq(flight), eq(FlightStatus.BOARDING),
+                eq(TransitionSource.OPERATOR), any()))
+                .thenThrow(new InvalidFlightStatusTransitionException("Cannot transition flight AA100 from ARRIVED to BOARDING"));
+
+        assertThatThrownBy(() -> flightService.updateStatus(id,
+                new FlightStatusUpdateRequest(FlightStatus.BOARDING, null)))
+                .isInstanceOf(InvalidFlightStatusTransitionException.class);
+    }
+
+    @Test
+    void getStatusHistoryReturnsChronologicalList() {
+        UUID id = UUID.randomUUID();
+        Flight flight = flightWithId(id, FlightStatus.BOARDING);
+        FlightStatusHistory first = new FlightStatusHistory(flight, null, FlightStatus.SCHEDULED,
+                TransitionSource.CREATED, null, OffsetDateTime.parse("2026-06-01T08:00:00Z"));
+        FlightStatusHistory second = new FlightStatusHistory(flight, FlightStatus.SCHEDULED, FlightStatus.BOARDING,
+                TransitionSource.OPERATOR, "Gate ready", OffsetDateTime.parse("2026-06-01T09:00:00Z"));
+
+        when(flightRepository.existsById(id)).thenReturn(true);
+        when(flightStatusHistoryRepository.findByFlightIdOrderByChangedAtAsc(id))
+                .thenReturn(List.of(first, second));
+
+        List<FlightStatusHistoryResponse> history = flightService.getStatusHistory(id);
+
+        assertThat(history).hasSize(2);
+        assertThat(history.get(0).previousStatus()).isNull();
+        assertThat(history.get(0).newStatus()).isEqualTo(FlightStatus.SCHEDULED);
+        assertThat(history.get(0).source()).isEqualTo(TransitionSource.CREATED);
+        assertThat(history.get(1).previousStatus()).isEqualTo(FlightStatus.SCHEDULED);
+        assertThat(history.get(1).newStatus()).isEqualTo(FlightStatus.BOARDING);
+        assertThat(history.get(1).source()).isEqualTo(TransitionSource.OPERATOR);
+        assertThat(history.get(1).reason()).isEqualTo("Gate ready");
+    }
+
+    @Test
+    void getStatusHistoryThrowsWhenFlightNotFound() {
+        UUID id = UUID.randomUUID();
+        when(flightRepository.existsById(id)).thenReturn(false);
+
+        assertThatThrownBy(() -> flightService.getStatusHistory(id))
                 .isInstanceOf(FlightNotFoundException.class);
     }
 }

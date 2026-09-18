@@ -20,6 +20,8 @@ import com.aeronex.eventing.kafka.KafkaTopics;
 import com.aeronex.flight.Flight;
 import com.aeronex.flight.FlightRepository;
 import com.aeronex.flight.FlightStatus;
+import com.aeronex.flight.FlightStatusTransitionService;
+import com.aeronex.flight.TransitionSource;
 import com.aeronex.flight.exception.FlightNotFoundException;
 
 @Service
@@ -29,12 +31,15 @@ public class DisruptionService {
     private final DisruptionRepository disruptionRepository;
     private final FlightRepository flightRepository;
     private final DomainEventPublisher domainEventPublisher;
+    private final FlightStatusTransitionService flightStatusTransitionService;
 
     public DisruptionService(DisruptionRepository disruptionRepository, FlightRepository flightRepository,
-                              DomainEventPublisher domainEventPublisher) {
+                              DomainEventPublisher domainEventPublisher,
+                              FlightStatusTransitionService flightStatusTransitionService) {
         this.disruptionRepository = disruptionRepository;
         this.flightRepository = flightRepository;
         this.domainEventPublisher = domainEventPublisher;
+        this.flightStatusTransitionService = flightStatusTransitionService;
     }
 
     @Transactional
@@ -80,6 +85,18 @@ public class DisruptionService {
         publishReportedEvent(saved);
         if (saved.getStatus() == DisruptionStatus.RESOLVED) {
             publishResolvedEvent(saved);
+        }
+
+        // HIGH/CRITICAL disruptions automatically delay the flight, through the same
+        // FlightStatusTransitionService an operator-requested update would use — never
+        // a second copy of the transition rules. canTransitionTo() makes this a silent
+        // no-op when the flight isn't in an eligible pre-departure state (e.g. already
+        // DELAYED, DEPARTED, or terminal): the disruption is still recorded, it just
+        // has no further effect on flight status. Never auto-cancels a flight.
+        if ((request.severity() == DisruptionSeverity.HIGH || request.severity() == DisruptionSeverity.CRITICAL)
+                && flight.canTransitionTo(FlightStatus.DELAYED)) {
+            flightStatusTransitionService.apply(flight, FlightStatus.DELAYED, TransitionSource.DISRUPTION_AUTO,
+                    "Auto-delayed due to " + request.severity() + " disruption " + saved.getId());
         }
 
         return DisruptionMapper.toResponse(saved);

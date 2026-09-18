@@ -15,6 +15,8 @@ import com.aeronex.airport.AirportRepository;
 import com.aeronex.airport.exception.AirportNotFoundException;
 import com.aeronex.flight.dto.FlightCreateRequest;
 import com.aeronex.flight.dto.FlightResponse;
+import com.aeronex.flight.dto.FlightStatusHistoryResponse;
+import com.aeronex.flight.dto.FlightStatusUpdateRequest;
 import com.aeronex.flight.exception.AircraftNotAvailableException;
 import com.aeronex.flight.exception.FlightNotFoundException;
 import com.aeronex.flight.exception.InvalidFlightException;
@@ -26,12 +28,18 @@ public class FlightService {
     private final FlightRepository flightRepository;
     private final AirportRepository airportRepository;
     private final AircraftRepository aircraftRepository;
+    private final FlightStatusHistoryRepository flightStatusHistoryRepository;
+    private final FlightStatusTransitionService flightStatusTransitionService;
 
     public FlightService(FlightRepository flightRepository, AirportRepository airportRepository,
-                          AircraftRepository aircraftRepository) {
+                          AircraftRepository aircraftRepository,
+                          FlightStatusHistoryRepository flightStatusHistoryRepository,
+                          FlightStatusTransitionService flightStatusTransitionService) {
         this.flightRepository = flightRepository;
         this.airportRepository = airportRepository;
         this.aircraftRepository = aircraftRepository;
+        this.flightStatusHistoryRepository = flightStatusHistoryRepository;
+        this.flightStatusTransitionService = flightStatusTransitionService;
     }
 
     @Transactional
@@ -80,7 +88,28 @@ public class FlightService {
         );
 
         Flight saved = flightRepository.saveAndFlush(flight);
+        flightStatusTransitionService.seedInitialHistory(saved);
         return FlightMapper.toResponse(saved);
+    }
+
+    @Transactional
+    public FlightResponse updateStatus(UUID id, FlightStatusUpdateRequest request) {
+        Flight flight = flightRepository.findById(id)
+                .orElseThrow(() -> FlightNotFoundException.forId(id));
+
+        Flight saved = flightStatusTransitionService.apply(flight, request.status(), TransitionSource.OPERATOR,
+                request.reason());
+
+        return FlightMapper.toResponse(saved);
+    }
+
+    public List<FlightStatusHistoryResponse> getStatusHistory(UUID id) {
+        if (!flightRepository.existsById(id)) {
+            throw FlightNotFoundException.forId(id);
+        }
+        return flightStatusHistoryRepository.findByFlightIdOrderByChangedAtAsc(id).stream()
+                .map(FlightMapper::toHistoryResponse)
+                .toList();
     }
 
     public List<FlightResponse> findAll() {

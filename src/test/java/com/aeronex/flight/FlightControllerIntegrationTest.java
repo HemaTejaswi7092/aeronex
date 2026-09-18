@@ -1,7 +1,9 @@
 package com.aeronex.flight;
 
 import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -211,6 +213,15 @@ class FlightControllerIntegrationTest {
                 """.formatted(jfk.getId(), lax.getId());
     }
 
+    private UUID createFlight() throws Exception {
+        String responseBody = mockMvc.perform(post("/api/flights")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(validFlightJson()))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        return UUID.fromString(objectMapper.readTree(responseBody).get("id").asText());
+    }
+
     @Test
     @WithAnonymousUser
     void createWithoutAuthenticationReturnsUnauthorized() throws Exception {
@@ -230,5 +241,116 @@ class FlightControllerIntegrationTest {
     void createWithAdminRoleSucceeds() throws Exception {
         mockMvc.perform(post("/api/flights").contentType(MediaType.APPLICATION_JSON).content(validFlightJson()))
                 .andExpect(status().isCreated());
+    }
+
+    @Test
+    void updateStatusWithValidTransitionSucceeds() throws Exception {
+        UUID id = createFlight();
+
+        mockMvc.perform(patch("/api/flights/" + id + "/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"BOARDING\",\"reason\":\"Gate ready\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("BOARDING"));
+    }
+
+    @Test
+    void updateStatusWithIllegalTransitionReturnsConflict() throws Exception {
+        UUID id = createFlight();
+
+        mockMvc.perform(patch("/api/flights/" + id + "/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"ARRIVED\"}"))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    void updateStatusWithMissingStatusReturnsBadRequest() throws Exception {
+        UUID id = createFlight();
+
+        mockMvc.perform(patch("/api/flights/" + id + "/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void updateStatusForUnknownFlightReturnsNotFound() throws Exception {
+        mockMvc.perform(patch("/api/flights/" + UUID.randomUUID() + "/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"BOARDING\"}"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @WithAnonymousUser
+    void updateStatusWithoutAuthenticationReturnsUnauthorized() throws Exception {
+        mockMvc.perform(patch("/api/flights/" + UUID.randomUUID() + "/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"BOARDING\"}"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @WithMockUser(roles = "VIEWER")
+    void updateStatusWithViewerRoleReturnsForbidden() throws Exception {
+        mockMvc.perform(patch("/api/flights/" + UUID.randomUUID() + "/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"BOARDING\"}"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void updateStatusWithAdminRoleSucceeds() throws Exception {
+        UUID id = createFlight();
+
+        mockMvc.perform(patch("/api/flights/" + id + "/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"BOARDING\"}"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void statusHistoryIncludesCreationSeedAndSubsequentTransitionInChronologicalOrder() throws Exception {
+        UUID id = createFlight();
+
+        mockMvc.perform(patch("/api/flights/" + id + "/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"BOARDING\",\"reason\":\"Gate ready\"}"))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/flights/" + id + "/status-history"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$", hasSize(2)))
+                .andExpect(jsonPath("$[0].previousStatus").value(nullValue()))
+                .andExpect(jsonPath("$[0].newStatus").value("SCHEDULED"))
+                .andExpect(jsonPath("$[0].source").value("CREATED"))
+                .andExpect(jsonPath("$[1].previousStatus").value("SCHEDULED"))
+                .andExpect(jsonPath("$[1].newStatus").value("BOARDING"))
+                .andExpect(jsonPath("$[1].source").value("OPERATOR"))
+                .andExpect(jsonPath("$[1].reason").value("Gate ready"));
+    }
+
+    @Test
+    void statusHistoryForUnknownFlightReturnsNotFound() throws Exception {
+        mockMvc.perform(get("/api/flights/" + UUID.randomUUID() + "/status-history"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @WithAnonymousUser
+    void statusHistoryWithoutAuthenticationReturnsUnauthorized() throws Exception {
+        mockMvc.perform(get("/api/flights/" + UUID.randomUUID() + "/status-history"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @WithMockUser(roles = "VIEWER")
+    void statusHistoryWithViewerRoleSucceeds() throws Exception {
+        // Read access follows the same convention as the other flight GET endpoints:
+        // any authenticated role may read, only writes are ADMIN/OPS-gated.
+        mockMvc.perform(get("/api/flights/" + UUID.randomUUID() + "/status-history"))
+                .andExpect(status().isNotFound());
     }
 }

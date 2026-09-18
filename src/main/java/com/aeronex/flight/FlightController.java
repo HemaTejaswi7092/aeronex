@@ -6,6 +6,7 @@ import java.util.UUID;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -14,6 +15,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.aeronex.flight.dto.FlightCreateRequest;
 import com.aeronex.flight.dto.FlightResponse;
+import com.aeronex.flight.dto.FlightStatusHistoryResponse;
+import com.aeronex.flight.dto.FlightStatusUpdateRequest;
 
 import jakarta.validation.Valid;
 
@@ -51,5 +54,15 @@ public class FlightController {
     @GetMapping("/airport/{iataCode}")
     public List<FlightResponse> getByAirport(@PathVariable String iataCode) {
         return flightService.findByAirport(iataCode);
+    }
+
+    @PatchMapping("/{id}/status")
+    public FlightResponse updateStatus(@PathVariable UUID id, @Valid @RequestBody FlightStatusUpdateRequest request) {
+        return flightService.updateStatus(id, request);
+    }
+
+    @GetMapping("/{id}/status-history")
+    public List<FlightStatusHistoryResponse> getStatusHistory(@PathVariable UUID id) {
+        return flightService.getStatusHistory(id);
     }
 }

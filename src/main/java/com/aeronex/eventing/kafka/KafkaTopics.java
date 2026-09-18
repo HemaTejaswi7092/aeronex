@@ -7,4 +7,5 @@ public final class KafkaTopics {
 
     public static final String DISRUPTION_REPORTED = "aeronex.disruption.reported";
     public static final String DISRUPTION_RESOLVED = "aeronex.disruption.resolved";
+    public static final String FLIGHT_STATUS_CHANGED = "aeronex.flight.status-changed";
 }

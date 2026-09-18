@@ -85,6 +85,17 @@ class DisruptionControllerIntegrationTest {
                 """.formatted(flightId);
     }
 
+    private String disruptionJsonWithSeverity(UUID flightId, String severity) {
+        return """
+                {
+                  "flightId": "%s",
+                  "type": "MECHANICAL",
+                  "severity": "%s",
+                  "description": "Engine inspection required"
+                }
+                """.formatted(flightId, severity);
+    }
+
     @Test
     void createAndRetrieveDisruption() throws Exception {
         String responseBody = mockMvc.perform(post("/api/disruptions")
@@ -239,5 +250,88 @@ class DisruptionControllerIntegrationTest {
     void resolveWithViewerRoleReturnsForbidden() throws Exception {
         mockMvc.perform(patch("/api/disruptions/" + UUID.randomUUID() + "/resolve"))
                 .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void createWithHighSeverityAutoDelaysFlight() throws Exception {
+        mockMvc.perform(post("/api/disruptions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(disruptionJsonWithSeverity(scheduledFlight.getId(), "HIGH")))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.flight.status").value("DELAYED"));
+
+        mockMvc.perform(get("/api/flights/" + scheduledFlight.getId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("DELAYED"));
+
+        // scheduledFlight is inserted directly via the repository in setUp(), bypassing
+        // FlightService.create(), so it has no CREATED seed row — this HIGH-severity
+        // disruption's automatic transition is the only history entry.
+        mockMvc.perform(get("/api/flights/" + scheduledFlight.getId() + "/status-history"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$", hasSize(1)))
+                .andExpect(jsonPath("$[0].source").value("DISRUPTION_AUTO"))
+                .andExpect(jsonPath("$[0].previousStatus").value("SCHEDULED"))
+                .andExpect(jsonPath("$[0].newStatus").value("DELAYED"));
+    }
+
+    @Test
+    void createWithMediumSeverityDoesNotChangeFlightStatus() throws Exception {
+        mockMvc.perform(post("/api/disruptions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(disruptionJsonWithSeverity(scheduledFlight.getId(), "MEDIUM")))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.flight.status").value("SCHEDULED"));
+
+        // No transition at all for MEDIUM severity, so no history row is created.
+        mockMvc.perform(get("/api/flights/" + scheduledFlight.getId() + "/status-history"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$", hasSize(0)));
+    }
+
+    @Test
+    void resolvingAutoDelayedDisruptionDoesNotRestoreFlightStatus() throws Exception {
+        String responseBody = mockMvc.perform(post("/api/disruptions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(disruptionJsonWithSeverity(scheduledFlight.getId(), "CRITICAL")))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        String id = objectMapper.readTree(responseBody).get("id").asText();
+
+        mockMvc.perform(patch("/api/disruptions/" + id + "/resolve"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("RESOLVED"));
+
+        mockMvc.perform(get("/api/flights/" + scheduledFlight.getId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("DELAYED"));
+
+        // Resolution must not add a history entry — only the one automatic
+        // disruption-driven transition from before, unchanged by resolve().
+        mockMvc.perform(get("/api/flights/" + scheduledFlight.getId() + "/status-history"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$", hasSize(1)));
+    }
+
+    @Test
+    void secondHighSeverityDisruptionOnAlreadyDelayedFlightAddsNoExtraHistory() throws Exception {
+        mockMvc.perform(post("/api/disruptions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(disruptionJsonWithSeverity(scheduledFlight.getId(), "HIGH")))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(post("/api/disruptions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(disruptionJsonWithSeverity(scheduledFlight.getId(), "CRITICAL")))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.flight.status").value("DELAYED"));
+
+        // Two disruptions were recorded, but the flight only ever transitioned once.
+        mockMvc.perform(get("/api/disruptions/flight/" + scheduledFlight.getId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$", hasSize(2)));
+        mockMvc.perform(get("/api/flights/" + scheduledFlight.getId() + "/status-history"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$", hasSize(1)));
     }
 }

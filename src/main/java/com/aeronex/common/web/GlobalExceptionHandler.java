@@ -21,6 +21,7 @@ import com.aeronex.disruption.exception.InvalidDisruptionException;
 import com.aeronex.flight.exception.AircraftNotAvailableException;
 import com.aeronex.flight.exception.FlightNotFoundException;
 import com.aeronex.flight.exception.InvalidFlightException;
+import com.aeronex.flight.exception.InvalidFlightStatusTransitionException;
 import com.aeronex.user.exception.DuplicateUsernameException;
 
 @RestControllerAdvice
@@ -64,6 +65,13 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(AircraftNotAvailableException.class)
     public ResponseEntity<ErrorResponse> handleAircraftNotAvailable(AircraftNotAvailableException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of(HttpStatus.CONFLICT, ex.getMessage()));
+    }
+
+    @ExceptionHandler(InvalidFlightStatusTransitionException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidFlightStatusTransition(
+            InvalidFlightStatusTransitionException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(ErrorResponse.of(HttpStatus.CONFLICT, ex.getMessage()));
     }
