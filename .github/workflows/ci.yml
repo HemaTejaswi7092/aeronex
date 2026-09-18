@@ -124,3 +124,214 @@ jobs:
       - name: Tear down
         if: always()
         run: docker compose down -v
+
+  k8s-integration-smoke:
+    needs: build-test-package
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create kind cluster
+        uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with:
+          cluster_name: aeronex
+
+      - name: Build image
+        run: docker build -t aeronex-aeronex-app:latest .
+
+      - name: Load image into kind
+        run: kind load docker-image aeronex-aeronex-app:latest --name aeronex
+
+      # Not a real secret, same reasoning as docker-integration-smoke's
+      # AERONEX_JWT_SECRET: created imperatively so no secret manifest is ever
+      # committed, and never a GitHub Actions secret since that would withhold
+      # it from pull_request runs triggered from forks.
+      - name: Create CI-only Kubernetes Secret
+        run: |
+          # admin-password matches the admin123 dev-default already used by
+          # .env.example and docker-compose.yml — kept consistent rather than
+          # diverging into a one-off value just for this job.
+          kubectl create secret generic aeronex-secrets \
+            --from-literal=jwt-secret='ci-only-non-secret-placeholder-32bytes-minimum-do-not-reuse' \
+            --from-literal=postgres-password='ci-only-non-secret-placeholder' \
+            --from-literal=admin-password='admin123'
+
+      - name: Apply manifests
+        run: |
+          kubectl apply -f k8s/app-configmap.yaml
+          kubectl apply -f k8s/postgres-pvc.yaml -f k8s/kafka-pvc.yaml
+          kubectl apply -f k8s/postgres-deployment.yaml -f k8s/postgres-service.yaml
+          kubectl apply -f k8s/kafka-deployment.yaml -f k8s/kafka-service.yaml
+          kubectl apply -f k8s/app-deployment.yaml -f k8s/app-service.yaml
+
+      - name: Wait for workloads to become Ready
+        run: |
+          kubectl wait --for=condition=Ready pod -l app=postgres --timeout=180s
+          kubectl wait --for=condition=Ready pod -l app=kafka --timeout=180s
+          kubectl wait --for=condition=Ready pod -l app=aeronex-app --timeout=240s
+
+      - name: Verify Flyway migrations applied
+        run: |
+          # kubectl logs with a label selector defaults to --tail=10 per pod;
+          # --tail=-1 is required here or the early Flyway lines are silently
+          # truncated. The log line JSON-escapes its quotes, so match on
+          # unambiguous substrings either side of them rather than the literal
+          # quoted phrase.
+          logs=$(kubectl logs -l app=aeronex-app --tail=-1)
+          echo "$logs" | grep -q "Successfully applied 8 migrations to schema"
+          echo "$logs" | grep -q "now at version v8"
+
+      - name: Start port-forward to AeroNex service
+        run: |
+          kubectl port-forward svc/aeronex-app 8080:8080 &
+          echo $! > /tmp/port-forward.pid
+          for _ in $(seq 1 10); do
+            if curl -sf http://localhost:8080/actuator/health > /dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "port-forward never became reachable" >&2
+          exit 1
+
+      - name: Smoke test authentication and authorization
+        run: |
+          set -e
+
+          # Login as the auto-bootstrapped ADMIN account and confirm a token is issued.
+          token=$(curl -sf -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"admin123"}' | jq -r .token)
+          if [ -z "$token" ] || [ "$token" = "null" ]; then
+            echo "login did not return a token" >&2
+            exit 1
+          fi
+
+          # A valid token must be accepted on a protected endpoint.
+          curl -sf http://localhost:8080/api/users/me -H "Authorization: Bearer $token" > /dev/null
+
+          # The same endpoint must reject an unauthenticated request.
+          status=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/users/me)
+          if [ "$status" != "401" ]; then
+            echo "expected 401 for unauthenticated request, got $status" >&2
+            exit 1
+          fi
+
+          # RBAC: create a VIEWER user (ADMIN-only) then confirm VIEWER is
+          # forbidden from an ADMIN-only write (proves authorization, not just
+          # authentication).
+          curl -sf -X POST http://localhost:8080/api/users \
+            -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+            -d '{"username":"ci-viewer","password":"ci-viewer-pass-123","role":"VIEWER"}' > /dev/null
+          viewer_token=$(curl -sf -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"ci-viewer","password":"ci-viewer-pass-123"}' | jq -r .token)
+          status=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8080/api/airports \
+            -H "Authorization: Bearer $viewer_token" -H 'Content-Type: application/json' \
+            -d '{"iataCode":"ZZZ","icaoCode":"ZZZZ","name":"Z","city":"Z","country":"Z","timezone":"UTC","latitude":0,"longitude":0}')
+          if [ "$status" != "403" ]; then
+            echo "expected 403 for VIEWER creating an airport, got $status" >&2
+            exit 1
+          fi
+
+      - name: Stop port-forward
+        if: always()
+        run: kill "$(cat /tmp/port-forward.pid)" 2>/dev/null || true
+
+      - name: Verify JWT fail-fast startup guard
+        run: |
+          set -e
+
+          # A one-shot Pod (not a Deployment) with a blank secret: restartPolicy
+          # Never means it fails once and stops, rather than crash-looping. It
+          # reuses the real ConfigMap/Secret already applied — Postgres and
+          # Kafka are already Ready by this point, so this isolates the JWT
+          # check from any dependency-reachability concern.
+          cat <<'EOF' | kubectl apply -f -
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: aeronex-blank-secret-test
+          spec:
+            restartPolicy: Never
+            containers:
+              - name: aeronex-app
+                image: aeronex-aeronex-app:latest
+                imagePullPolicy: Never
+                envFrom:
+                  - configMapRef:
+                      name: aeronex-config
+                env:
+                  - name: AERONEX_JWT_SECRET
+                    value: ""
+                  - name: SPRING_DATASOURCE_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: aeronex-secrets
+                        key: postgres-password
+                  - name: AERONEX_ADMIN_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: aeronex-secrets
+                        key: admin-password
+          EOF
+
+          found=""
+          for _ in $(seq 1 20); do
+            if kubectl logs pod/aeronex-blank-secret-test 2>/dev/null | grep -q "AERONEX_JWT_SECRET"; then
+              found=1
+              break
+            fi
+            sleep 3
+          done
+
+          kubectl logs pod/aeronex-blank-secret-test > /tmp/blank-secret.log 2>&1 || true
+
+          if [ -z "$found" ]; then
+            echo "expected fail-fast message naming AERONEX_JWT_SECRET was not found" >&2
+            cat /tmp/blank-secret.log
+            exit 1
+          fi
+
+          if grep -qi "ci-only-non-secret-placeholder" /tmp/blank-secret.log; then
+            echo "a secret value leaked into pod logs" >&2
+            exit 1
+          fi
+
+          # The pod's .status.phase can briefly still read "Running" right after
+          # the container process has already exited — the kubelet hasn't
+          # reconciled it yet. Poll for a terminal phase instead of checking once.
+          phase=""
+          for _ in $(seq 1 10); do
+            phase=$(kubectl get pod aeronex-blank-secret-test -o jsonpath='{.status.phase}')
+            [ "$phase" != "Running" ] && [ "$phase" != "Pending" ] && break
+            sleep 2
+          done
+          echo "final pod phase: $phase"
+          if [ "$phase" = "Running" ]; then
+            echo "pod unexpectedly reached Running with a blank JWT secret" >&2
+            exit 1
+          fi
+
+          kubectl delete pod aeronex-blank-secret-test --ignore-not-found
+
+      - name: Collect Kubernetes diagnostics on failure
+        if: failure()
+        run: |
+          echo "--- pods ---"
+          kubectl get pods -o wide
+          echo "--- events ---"
+          kubectl get events --sort-by='.lastTimestamp'
+          echo "--- postgres logs ---"
+          kubectl logs -l app=postgres --tail=200 || true
+          echo "--- kafka logs ---"
+          kubectl logs -l app=kafka --tail=200 || true
+          echo "--- aeronex-app logs ---"
+          kubectl logs -l app=aeronex-app --tail=200 || true
+
+      - name: Tear down
+        if: always()
+        run: |
+          kill "$(cat /tmp/port-forward.pid)" 2>/dev/null || true
+          kind delete cluster --name aeronex || true
