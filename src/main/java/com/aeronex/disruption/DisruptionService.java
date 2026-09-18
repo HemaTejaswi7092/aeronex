@@ -15,6 +15,10 @@ import com.aeronex.disruption.event.FlightDisruptionResolvedPayload;
 import com.aeronex.disruption.exception.DisruptionNotFoundException;
 import com.aeronex.disruption.exception.FlightNotEligibleForDisruptionException;
 import com.aeronex.disruption.exception.InvalidDisruptionException;
+import com.aeronex.aircraft.Aircraft;
+import com.aeronex.aircraft.AircraftStatus;
+import com.aeronex.aircraft.AircraftStatusTransitionService;
+import com.aeronex.aircraft.AircraftTransitionSource;
 import com.aeronex.eventing.DomainEventPublisher;
 import com.aeronex.eventing.kafka.KafkaTopics;
 import com.aeronex.flight.Flight;
@@ -32,14 +36,17 @@ public class DisruptionService {
     private final FlightRepository flightRepository;
     private final DomainEventPublisher domainEventPublisher;
     private final FlightStatusTransitionService flightStatusTransitionService;
+    private final AircraftStatusTransitionService aircraftStatusTransitionService;
 
     public DisruptionService(DisruptionRepository disruptionRepository, FlightRepository flightRepository,
                               DomainEventPublisher domainEventPublisher,
-                              FlightStatusTransitionService flightStatusTransitionService) {
+                              FlightStatusTransitionService flightStatusTransitionService,
+                              AircraftStatusTransitionService aircraftStatusTransitionService) {
         this.disruptionRepository = disruptionRepository;
         this.flightRepository = flightRepository;
         this.domainEventPublisher = domainEventPublisher;
         this.flightStatusTransitionService = flightStatusTransitionService;
+        this.aircraftStatusTransitionService = aircraftStatusTransitionService;
     }
 
     @Transactional
@@ -97,6 +104,22 @@ public class DisruptionService {
                 && flight.canTransitionTo(FlightStatus.DELAYED)) {
             flightStatusTransitionService.apply(flight, FlightStatus.DELAYED, TransitionSource.DISRUPTION_AUTO,
                     "Auto-delayed due to " + request.severity() + " disruption " + saved.getId());
+        }
+
+        // MECHANICAL disruptions evaluate aircraft maintenance regardless of severity —
+        // independent of the flight-delay rule above (a different disruption type/
+        // condition drives each), through the same AircraftStatusTransitionService an
+        // operator-requested update would use. canTransitionTo() makes this a silent
+        // no-op when there's no assigned aircraft, or it isn't in an eligible state
+        // (e.g. already MAINTENANCE or OUT_OF_SERVICE): the disruption is still
+        // recorded, it just has no further effect on aircraft status.
+        if (request.type() == DisruptionType.MECHANICAL) {
+            Aircraft aircraft = flight.getAircraft();
+            if (aircraft != null && aircraft.canTransitionTo(AircraftStatus.MAINTENANCE)) {
+                aircraftStatusTransitionService.apply(aircraft, AircraftStatus.MAINTENANCE,
+                        AircraftTransitionSource.DISRUPTION_AUTO,
+                        "Auto-maintenance due to MECHANICAL disruption " + saved.getId());
+            }
         }
 
         return DisruptionMapper.toResponse(saved);

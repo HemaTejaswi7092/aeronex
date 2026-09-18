@@ -1,10 +1,14 @@
 package com.aeronex.aircraft;
 
 import java.time.Instant;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
+
+import com.aeronex.aircraft.exception.InvalidAircraftStatusTransitionException;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -18,6 +22,19 @@ import jakarta.persistence.Table;
 @Entity
 @Table(name = "aircraft")
 public class Aircraft {
+
+    // The single source of truth for legal aircraft lifecycle transitions. Both
+    // operator-requested updates (AircraftStatusTransitionService, called from
+    // AircraftService) and automatic disruption-driven transitions (the same
+    // service, called from DisruptionService) go through transitionTo() below
+    // — there is no second copy of this table anywhere in the codebase. Note
+    // MAINTENANCE has only one exit, to OUT_OF_SERVICE: there is no direct
+    // MAINTENANCE -> ACTIVE path, by explicit design.
+    private static final Map<AircraftStatus, Set<AircraftStatus>> ALLOWED_TRANSITIONS = Map.of(
+            AircraftStatus.ACTIVE, Set.of(AircraftStatus.MAINTENANCE, AircraftStatus.OUT_OF_SERVICE),
+            AircraftStatus.MAINTENANCE, Set.of(AircraftStatus.OUT_OF_SERVICE),
+            AircraftStatus.OUT_OF_SERVICE, Set.of(AircraftStatus.ACTIVE)
+    );
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
@@ -81,6 +98,18 @@ public class Aircraft {
 
     public AircraftStatus getStatus() {
         return status;
+    }
+
+    public boolean canTransitionTo(AircraftStatus target) {
+        return ALLOWED_TRANSITIONS.getOrDefault(status, Set.of()).contains(target);
+    }
+
+    public void transitionTo(AircraftStatus target) {
+        if (!canTransitionTo(target)) {
+            throw new InvalidAircraftStatusTransitionException(
+                    "Cannot transition aircraft " + registrationNumber + " from " + status + " to " + target);
+        }
+        this.status = target;
     }
 
     public Instant getCreatedAt() {

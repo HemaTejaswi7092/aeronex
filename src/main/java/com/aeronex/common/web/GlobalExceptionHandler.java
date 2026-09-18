@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import com.aeronex.aircraft.exception.AircraftNotFoundException;
 import com.aeronex.aircraft.exception.DuplicateRegistrationNumberException;
+import com.aeronex.aircraft.exception.InvalidAircraftStatusTransitionException;
 import com.aeronex.airport.exception.AirportNotFoundException;
 import com.aeronex.airport.exception.DuplicateAirportCodeException;
 import com.aeronex.disruption.exception.DisruptionNotFoundException;
@@ -47,6 +48,13 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(DuplicateRegistrationNumberException.class)
     public ResponseEntity<ErrorResponse> handleDuplicateRegistrationNumber(DuplicateRegistrationNumberException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of(HttpStatus.CONFLICT, ex.getMessage()));
+    }
+
+    @ExceptionHandler(InvalidAircraftStatusTransitionException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidAircraftStatusTransition(
+            InvalidAircraftStatusTransitionException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(ErrorResponse.of(HttpStatus.CONFLICT, ex.getMessage()));
     }

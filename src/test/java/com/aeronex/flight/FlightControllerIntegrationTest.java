@@ -52,6 +52,7 @@ class FlightControllerIntegrationTest {
     private Airport lax;
     private Aircraft activeAircraft;
     private Aircraft outOfServiceAircraft;
+    private Aircraft maintenanceAircraft;
 
     @BeforeEach
     void setUp() {
@@ -65,6 +66,8 @@ class FlightControllerIntegrationTest {
                 new Aircraft("N12345", "Boeing", "737-800", 189, AircraftStatus.ACTIVE));
         outOfServiceAircraft = aircraftRepository.saveAndFlush(
                 new Aircraft("N99999", "Boeing", "747-400", 400, AircraftStatus.OUT_OF_SERVICE));
+        maintenanceAircraft = aircraftRepository.saveAndFlush(
+                new Aircraft("N88888", "Airbus", "A320", 150, AircraftStatus.MAINTENANCE));
     }
 
     @Test
@@ -157,6 +160,23 @@ class FlightControllerIntegrationTest {
                   "scheduledArrivalTime": "2026-06-01T13:00:00-04:00"
                 }
                 """.formatted(jfk.getId(), lax.getId(), outOfServiceAircraft.getId());
+
+        mockMvc.perform(post("/api/flights").contentType(MediaType.APPLICATION_JSON).content(json))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    void createWithAircraftInMaintenanceReturnsConflict() throws Exception {
+        String json = """
+                {
+                  "flightNumber": "AA100",
+                  "originAirportId": "%s",
+                  "destinationAirportId": "%s",
+                  "aircraftId": "%s",
+                  "scheduledDepartureTime": "2026-06-01T10:00:00-04:00",
+                  "scheduledArrivalTime": "2026-06-01T13:00:00-04:00"
+                }
+                """.formatted(jfk.getId(), lax.getId(), maintenanceAircraft.getId());
 
         mockMvc.perform(post("/api/flights").contentType(MediaType.APPLICATION_JSON).content(json))
                 .andExpect(status().isConflict());

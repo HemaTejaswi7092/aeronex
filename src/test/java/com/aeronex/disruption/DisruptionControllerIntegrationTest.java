@@ -23,6 +23,9 @@ import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.aeronex.aircraft.Aircraft;
+import com.aeronex.aircraft.AircraftRepository;
+import com.aeronex.aircraft.AircraftStatus;
 import com.aeronex.airport.Airport;
 import com.aeronex.airport.AirportRepository;
 import com.aeronex.flight.Flight;
@@ -49,9 +52,14 @@ class DisruptionControllerIntegrationTest {
     @Autowired
     private FlightRepository flightRepository;
 
+    @Autowired
+    private AircraftRepository aircraftRepository;
+
     private Flight scheduledFlight;
     private Flight arrivedFlight;
     private Flight cancelledFlight;
+    private Flight flightWithAircraft;
+    private Aircraft assignedAircraft;
 
     @BeforeEach
     void setUp() {
@@ -71,6 +79,11 @@ class DisruptionControllerIntegrationTest {
                 departure, arrival, departure, arrival, FlightStatus.ARRIVED));
         cancelledFlight = flightRepository.saveAndFlush(new Flight("AA300", jfk, lax, null,
                 departure, arrival, null, null, FlightStatus.CANCELLED));
+
+        assignedAircraft = aircraftRepository.saveAndFlush(
+                new Aircraft("N77777", "Boeing", "737-800", 189, AircraftStatus.ACTIVE));
+        flightWithAircraft = flightRepository.saveAndFlush(new Flight("AA400", jfk, lax, assignedAircraft,
+                departure, arrival, null, null, FlightStatus.SCHEDULED));
     }
 
     private String validDisruptionJson(UUID flightId) {
@@ -333,5 +346,105 @@ class DisruptionControllerIntegrationTest {
         mockMvc.perform(get("/api/flights/" + scheduledFlight.getId() + "/status-history"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$", hasSize(1)));
+    }
+
+    @Test
+    void createWithMechanicalDisruptionTransitionsAircraftToMaintenanceRegardlessOfSeverity() throws Exception {
+        // LOW severity: proves the aircraft rule is severity-independent, unlike the
+        // flight-delay rule (which requires HIGH/CRITICAL).
+        mockMvc.perform(post("/api/disruptions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(disruptionJsonWithSeverity(flightWithAircraft.getId(), "LOW")))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(get("/api/aircraft/" + assignedAircraft.getId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("MAINTENANCE"));
+
+        // assignedAircraft is inserted directly via the repository in setUp(),
+        // bypassing AircraftService.create(), so it has no CREATED seed row.
+        mockMvc.perform(get("/api/aircraft/" + assignedAircraft.getId() + "/status-history"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$", hasSize(1)))
+                .andExpect(jsonPath("$[0].source").value("DISRUPTION_AUTO"))
+                .andExpect(jsonPath("$[0].previousStatus").value("ACTIVE"))
+                .andExpect(jsonPath("$[0].newStatus").value("MAINTENANCE"));
+
+        // LOW severity must still not delay the flight -- the two rules are independent.
+        mockMvc.perform(get("/api/flights/" + flightWithAircraft.getId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("SCHEDULED"));
+    }
+
+    @Test
+    void createWithNonMechanicalDisruptionDoesNotChangeAircraftStatus() throws Exception {
+        mockMvc.perform(post("/api/disruptions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(validDisruptionJson(flightWithAircraft.getId()))) // WEATHER type
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(get("/api/aircraft/" + assignedAircraft.getId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ACTIVE"));
+
+        mockMvc.perform(get("/api/aircraft/" + assignedAircraft.getId() + "/status-history"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$", hasSize(0)));
+    }
+
+    @Test
+    void repeatedMechanicalDisruptionsOnSameAircraftAddNoExtraHistoryAfterMaintenance() throws Exception {
+        mockMvc.perform(post("/api/disruptions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(disruptionJsonWithSeverity(flightWithAircraft.getId(), "HIGH")))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(post("/api/disruptions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(disruptionJsonWithSeverity(flightWithAircraft.getId(), "CRITICAL")))
+                .andExpect(status().isCreated());
+
+        // Two MECHANICAL disruptions were recorded, but the aircraft only ever
+        // transitioned once -- idempotent, not a duplicate history row or error.
+        mockMvc.perform(get("/api/disruptions/flight/" + flightWithAircraft.getId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$", hasSize(2)));
+        mockMvc.perform(get("/api/aircraft/" + assignedAircraft.getId() + "/status-history"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$", hasSize(1)));
+    }
+
+    @Test
+    void mechanicalDisruptionCanDelayFlightAndTransitionAircraftFromTheSameDisruption() throws Exception {
+        // MECHANICAL + HIGH: eligible for both the flight-delay rule and the
+        // aircraft-maintenance rule at once -- they are independent, not coupled,
+        // and both fire from the same disruption.
+        mockMvc.perform(post("/api/disruptions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(disruptionJsonWithSeverity(flightWithAircraft.getId(), "HIGH")))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.flight.status").value("DELAYED"));
+
+        mockMvc.perform(get("/api/aircraft/" + assignedAircraft.getId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("MAINTENANCE"));
+    }
+
+    @Test
+    void resolvingMechanicalDisruptionDoesNotRestoreAircraftStatus() throws Exception {
+        String responseBody = mockMvc.perform(post("/api/disruptions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(disruptionJsonWithSeverity(flightWithAircraft.getId(), "HIGH")))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        String id = objectMapper.readTree(responseBody).get("id").asText();
+
+        mockMvc.perform(patch("/api/disruptions/" + id + "/resolve"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("RESOLVED"));
+
+        mockMvc.perform(get("/api/aircraft/" + assignedAircraft.getId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("MAINTENANCE"));
     }
 }

@@ -24,6 +24,10 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import com.aeronex.aircraft.Aircraft;
+import com.aeronex.aircraft.AircraftStatus;
+import com.aeronex.aircraft.AircraftStatusTransitionService;
+import com.aeronex.aircraft.AircraftTransitionSource;
 import com.aeronex.airport.Airport;
 import com.aeronex.disruption.dto.DisruptionCreateRequest;
 import com.aeronex.disruption.dto.DisruptionResponse;
@@ -54,6 +58,9 @@ class DisruptionServiceTest {
     @Mock
     private FlightStatusTransitionService flightStatusTransitionService;
 
+    @Mock
+    private AircraftStatusTransitionService aircraftStatusTransitionService;
+
     private DisruptionService disruptionService;
 
     private final UUID flightId = UUID.randomUUID();
@@ -64,11 +71,21 @@ class DisruptionServiceTest {
     }
 
     private Flight flightWithStatus(FlightStatus status) {
-        Flight flight = new Flight("AA100", airport("JFK"), airport("LAX"), null,
+        return flightWithStatusAndAircraft(status, null);
+    }
+
+    private Flight flightWithStatusAndAircraft(FlightStatus status, Aircraft aircraft) {
+        Flight flight = new Flight("AA100", airport("JFK"), airport("LAX"), aircraft,
                 OffsetDateTime.parse("2026-06-01T10:00:00Z"), OffsetDateTime.parse("2026-06-01T13:00:00Z"),
                 null, null, status);
         ReflectionTestUtils.setField(flight, "id", flightId);
         return flight;
+    }
+
+    private Aircraft aircraftWithStatus(AircraftStatus status) {
+        Aircraft aircraft = new Aircraft("N12345", "Boeing", "737-800", 189, status);
+        ReflectionTestUtils.setField(aircraft, "id", UUID.randomUUID());
+        return aircraft;
     }
 
     private DisruptionCreateRequest validRequest(DisruptionStatus status, OffsetDateTime reportedAt,
@@ -90,7 +107,7 @@ class DisruptionServiceTest {
     @BeforeEach
     void setUp() {
         disruptionService = new DisruptionService(disruptionRepository, flightRepository, domainEventPublisher,
-                flightStatusTransitionService);
+                flightStatusTransitionService, aircraftStatusTransitionService);
     }
 
     @Test
@@ -111,6 +128,7 @@ class DisruptionServiceTest {
         verify(domainEventPublisher, never()).publish(eq(KafkaTopics.DISRUPTION_RESOLVED), any(UUID.class),
                 anyString(), anyInt(), any());
         verifyNoInteractions(flightStatusTransitionService);
+        verifyNoInteractions(aircraftStatusTransitionService);
     }
 
     @Test
@@ -123,6 +141,9 @@ class DisruptionServiceTest {
 
         verify(flightStatusTransitionService).apply(any(Flight.class), eq(FlightStatus.DELAYED),
                 eq(TransitionSource.DISRUPTION_AUTO), anyString());
+        // requestWithSeverity uses MECHANICAL, but this flight has no assigned
+        // aircraft, so the independent aircraft-maintenance rule must not fire.
+        verifyNoInteractions(aircraftStatusTransitionService);
     }
 
     @Test
@@ -135,6 +156,7 @@ class DisruptionServiceTest {
 
         verify(flightStatusTransitionService).apply(any(Flight.class), eq(FlightStatus.DELAYED),
                 eq(TransitionSource.DISRUPTION_AUTO), anyString());
+        verifyNoInteractions(aircraftStatusTransitionService);
     }
 
     @Test
@@ -280,6 +302,7 @@ class DisruptionServiceTest {
         verify(domainEventPublisher, times(1)).publish(eq(KafkaTopics.DISRUPTION_RESOLVED), any(UUID.class),
                 eq("FlightDisruptionResolved"), eq(1), any());
         verifyNoInteractions(flightStatusTransitionService);
+        verifyNoInteractions(aircraftStatusTransitionService);
     }
 
     @Test
@@ -301,5 +324,95 @@ class DisruptionServiceTest {
         verify(domainEventPublisher, never()).publish(eq(KafkaTopics.DISRUPTION_RESOLVED), any(UUID.class),
                 anyString(), anyInt(), any());
         verifyNoInteractions(flightStatusTransitionService);
+        verifyNoInteractions(aircraftStatusTransitionService);
+    }
+
+    @Test
+    void createTransitionsAircraftToMaintenanceForMechanicalDisruptionRegardlessOfSeverity() {
+        Aircraft aircraft = aircraftWithStatus(AircraftStatus.ACTIVE);
+        when(flightRepository.findById(flightId))
+                .thenReturn(Optional.of(flightWithStatusAndAircraft(FlightStatus.SCHEDULED, aircraft)));
+        when(disruptionRepository.saveAndFlush(any(Disruption.class)))
+                .thenAnswer(invocation -> withGeneratedId(invocation.getArgument(0)));
+
+        // LOW severity: proves the aircraft rule is severity-independent, unlike the
+        // flight-delay rule.
+        disruptionService.create(requestWithSeverity(DisruptionSeverity.LOW));
+
+        verify(aircraftStatusTransitionService).apply(eq(aircraft), eq(AircraftStatus.MAINTENANCE),
+                eq(AircraftTransitionSource.DISRUPTION_AUTO), anyString());
+        // LOW severity must still not delay the flight -- the two rules are independent.
+        verifyNoInteractions(flightStatusTransitionService);
+    }
+
+    @Test
+    void createDoesNotTransitionAircraftForNonMechanicalDisruption() {
+        Aircraft aircraft = aircraftWithStatus(AircraftStatus.ACTIVE);
+        when(flightRepository.findById(flightId))
+                .thenReturn(Optional.of(flightWithStatusAndAircraft(FlightStatus.SCHEDULED, aircraft)));
+        when(disruptionRepository.saveAndFlush(any(Disruption.class)))
+                .thenAnswer(invocation -> withGeneratedId(invocation.getArgument(0)));
+
+        disruptionService.create(validRequest(null, null, null)); // WEATHER type
+
+        verifyNoInteractions(aircraftStatusTransitionService);
+    }
+
+    @Test
+    void createDoesNotTransitionAircraftWhenNoAircraftAssigned() {
+        when(flightRepository.findById(flightId))
+                .thenReturn(Optional.of(flightWithStatusAndAircraft(FlightStatus.SCHEDULED, null)));
+        when(disruptionRepository.saveAndFlush(any(Disruption.class)))
+                .thenAnswer(invocation -> withGeneratedId(invocation.getArgument(0)));
+
+        disruptionService.create(requestWithSeverity(DisruptionSeverity.CRITICAL));
+
+        verifyNoInteractions(aircraftStatusTransitionService);
+    }
+
+    @Test
+    void createDoesNotTransitionAircraftWhenAlreadyInMaintenance() {
+        Aircraft aircraft = aircraftWithStatus(AircraftStatus.MAINTENANCE);
+        when(flightRepository.findById(flightId))
+                .thenReturn(Optional.of(flightWithStatusAndAircraft(FlightStatus.SCHEDULED, aircraft)));
+        when(disruptionRepository.saveAndFlush(any(Disruption.class)))
+                .thenAnswer(invocation -> withGeneratedId(invocation.getArgument(0)));
+
+        // A second MECHANICAL disruption against an aircraft already under
+        // maintenance must be a no-op -- idempotent, not an error.
+        disruptionService.create(requestWithSeverity(DisruptionSeverity.HIGH));
+
+        verifyNoInteractions(aircraftStatusTransitionService);
+    }
+
+    @Test
+    void createDoesNotTransitionAircraftWhenOutOfService() {
+        Aircraft aircraft = aircraftWithStatus(AircraftStatus.OUT_OF_SERVICE);
+        when(flightRepository.findById(flightId))
+                .thenReturn(Optional.of(flightWithStatusAndAircraft(FlightStatus.SCHEDULED, aircraft)));
+        when(disruptionRepository.saveAndFlush(any(Disruption.class)))
+                .thenAnswer(invocation -> withGeneratedId(invocation.getArgument(0)));
+
+        disruptionService.create(requestWithSeverity(DisruptionSeverity.CRITICAL));
+
+        verifyNoInteractions(aircraftStatusTransitionService);
+    }
+
+    @Test
+    void createCanDelayFlightAndTransitionAircraftIndependentlyFromTheSameDisruption() {
+        Aircraft aircraft = aircraftWithStatus(AircraftStatus.ACTIVE);
+        when(flightRepository.findById(flightId))
+                .thenReturn(Optional.of(flightWithStatusAndAircraft(FlightStatus.SCHEDULED, aircraft)));
+        when(disruptionRepository.saveAndFlush(any(Disruption.class)))
+                .thenAnswer(invocation -> withGeneratedId(invocation.getArgument(0)));
+
+        // MECHANICAL + HIGH: eligible for both the flight-delay rule and the
+        // aircraft-maintenance rule at once -- they are independent, not coupled.
+        disruptionService.create(requestWithSeverity(DisruptionSeverity.HIGH));
+
+        verify(flightStatusTransitionService).apply(any(Flight.class), eq(FlightStatus.DELAYED),
+                eq(TransitionSource.DISRUPTION_AUTO), anyString());
+        verify(aircraftStatusTransitionService).apply(eq(aircraft), eq(AircraftStatus.MAINTENANCE),
+                eq(AircraftTransitionSource.DISRUPTION_AUTO), anyString());
     }
 }

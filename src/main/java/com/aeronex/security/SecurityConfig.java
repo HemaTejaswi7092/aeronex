@@ -67,6 +67,8 @@ public class SecurityConfig {
                         .hasAnyRole("ADMIN", "OPS")
                         .requestMatchers(HttpMethod.PATCH, "/api/flights/*/status")
                         .hasAnyRole("ADMIN", "OPS")
+                        .requestMatchers(HttpMethod.PATCH, "/api/aircraft/*/status")
+                        .hasRole("ADMIN")
                         .requestMatchers("/api/**").authenticated()
                         .anyRequest().denyAll())
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);

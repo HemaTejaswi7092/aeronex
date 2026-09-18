@@ -9,6 +9,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.aeronex.aircraft.dto.AircraftCreateRequest;
 import com.aeronex.aircraft.dto.AircraftResponse;
+import com.aeronex.aircraft.dto.AircraftStatusHistoryResponse;
+import com.aeronex.aircraft.dto.AircraftStatusUpdateRequest;
 import com.aeronex.aircraft.exception.AircraftNotFoundException;
 import com.aeronex.aircraft.exception.DuplicateRegistrationNumberException;
 
@@ -17,9 +19,15 @@ import com.aeronex.aircraft.exception.DuplicateRegistrationNumberException;
 public class AircraftService {
 
     private final AircraftRepository aircraftRepository;
+    private final AircraftStatusHistoryRepository aircraftStatusHistoryRepository;
+    private final AircraftStatusTransitionService aircraftStatusTransitionService;
 
-    public AircraftService(AircraftRepository aircraftRepository) {
+    public AircraftService(AircraftRepository aircraftRepository,
+                            AircraftStatusHistoryRepository aircraftStatusHistoryRepository,
+                            AircraftStatusTransitionService aircraftStatusTransitionService) {
         this.aircraftRepository = aircraftRepository;
+        this.aircraftStatusHistoryRepository = aircraftStatusHistoryRepository;
+        this.aircraftStatusTransitionService = aircraftStatusTransitionService;
     }
 
     @Transactional
@@ -39,13 +47,36 @@ public class AircraftService {
                 status
         );
 
+        Aircraft saved;
         try {
-            Aircraft saved = aircraftRepository.saveAndFlush(aircraft);
-            return AircraftMapper.toResponse(saved);
+            saved = aircraftRepository.saveAndFlush(aircraft);
         } catch (DataIntegrityViolationException e) {
             throw new DuplicateRegistrationNumberException(
                     "Aircraft with registration number " + request.registrationNumber() + " already exists", e);
         }
+
+        aircraftStatusTransitionService.seedInitialHistory(saved);
+        return AircraftMapper.toResponse(saved);
+    }
+
+    @Transactional
+    public AircraftResponse updateStatus(UUID id, AircraftStatusUpdateRequest request) {
+        Aircraft aircraft = aircraftRepository.findById(id)
+                .orElseThrow(() -> AircraftNotFoundException.forId(id));
+
+        Aircraft saved = aircraftStatusTransitionService.apply(aircraft, request.status(),
+                AircraftTransitionSource.OPERATOR, request.reason());
+
+        return AircraftMapper.toResponse(saved);
+    }
+
+    public List<AircraftStatusHistoryResponse> getStatusHistory(UUID id) {
+        if (!aircraftRepository.existsById(id)) {
+            throw AircraftNotFoundException.forId(id);
+        }
+        return aircraftStatusHistoryRepository.findByAircraftIdOrderByChangedAtAsc(id).stream()
+                .map(AircraftMapper::toHistoryResponse)
+                .toList();
     }
 
     public List<AircraftResponse> findAll() {

@@ -53,6 +53,12 @@ public class KafkaConfig {
     }
 
     @Bean
+    @ConditionalOnProperty(name = "aeronex.outbox.relay.enabled", havingValue = "true", matchIfMissing = true)
+    public NewTopic aircraftStatusChangedTopic() {
+        return TopicBuilder.name(KafkaTopics.AIRCRAFT_STATUS_CHANGED).partitions(1).replicas(1).build();
+    }
+
+    @Bean
     public ProducerFactory<String, String> producerFactory(KafkaProperties kafkaProperties) {
         Map<String, Object> props = kafkaProperties.buildProducerProperties(null);
         return new DefaultKafkaProducerFactory<>(props, new StringSerializer(), new StringSerializer());

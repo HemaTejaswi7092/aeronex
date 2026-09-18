@@ -66,10 +66,11 @@ public class FlightService {
         if (request.aircraftId() != null) {
             aircraft = aircraftRepository.findById(request.aircraftId())
                     .orElseThrow(() -> AircraftNotFoundException.forId(request.aircraftId()));
-            if (aircraft.getStatus() == AircraftStatus.OUT_OF_SERVICE) {
+            if (aircraft.getStatus() == AircraftStatus.OUT_OF_SERVICE
+                    || aircraft.getStatus() == AircraftStatus.MAINTENANCE) {
                 throw new AircraftNotAvailableException(
                         "Aircraft with registration number " + aircraft.getRegistrationNumber()
-                                + " is out of service and cannot be assigned to a flight");
+                                + " is " + aircraft.getStatus() + " and cannot be assigned to a flight");
             }
         }
 

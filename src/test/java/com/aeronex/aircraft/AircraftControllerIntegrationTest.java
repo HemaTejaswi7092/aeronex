@@ -1,7 +1,9 @@
 package com.aeronex.aircraft;
 
 import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -42,6 +44,15 @@ class AircraftControllerIntegrationTest {
               "status": "ACTIVE"
             }
             """;
+
+    private UUID createAircraft() throws Exception {
+        String responseBody = mockMvc.perform(post("/api/aircraft")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(VALID_AIRCRAFT_JSON))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        return UUID.fromString(objectMapper.readTree(responseBody).get("id").asText());
+    }
 
     @Test
     void createAndRetrieveAircraft() throws Exception {
@@ -162,5 +173,133 @@ class AircraftControllerIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(VALID_AIRCRAFT_JSON))
                 .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void updateStatusWithValidTransitionSucceeds() throws Exception {
+        UUID id = createAircraft();
+
+        mockMvc.perform(patch("/api/aircraft/" + id + "/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"MAINTENANCE\",\"reason\":\"Scheduled check\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("MAINTENANCE"));
+    }
+
+    @Test
+    void updateStatusWithIllegalTransitionReturnsConflict() throws Exception {
+        UUID id = createAircraft();
+
+        // ACTIVE -> ACTIVE is not a legal transition (no self-transitions).
+        mockMvc.perform(patch("/api/aircraft/" + id + "/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"ACTIVE\"}"))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    void updateStatusMaintenanceToActiveDirectlyReturnsConflict() throws Exception {
+        UUID id = createAircraft();
+
+        mockMvc.perform(patch("/api/aircraft/" + id + "/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"MAINTENANCE\"}"))
+                .andExpect(status().isOk());
+
+        // MAINTENANCE has no direct path back to ACTIVE, by explicit design.
+        mockMvc.perform(patch("/api/aircraft/" + id + "/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"ACTIVE\"}"))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    void updateStatusWithMissingStatusReturnsBadRequest() throws Exception {
+        UUID id = createAircraft();
+
+        mockMvc.perform(patch("/api/aircraft/" + id + "/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void updateStatusForUnknownAircraftReturnsNotFound() throws Exception {
+        mockMvc.perform(patch("/api/aircraft/" + UUID.randomUUID() + "/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"MAINTENANCE\"}"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @WithAnonymousUser
+    void updateStatusWithoutAuthenticationReturnsUnauthorized() throws Exception {
+        mockMvc.perform(patch("/api/aircraft/" + UUID.randomUUID() + "/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"MAINTENANCE\"}"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @WithMockUser(roles = "VIEWER")
+    void updateStatusWithViewerRoleReturnsForbidden() throws Exception {
+        mockMvc.perform(patch("/api/aircraft/" + UUID.randomUUID() + "/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"MAINTENANCE\"}"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @WithMockUser(roles = "OPS")
+    void updateStatusWithOpsRoleReturnsForbidden() throws Exception {
+        // Unlike Flight/Disruption, Aircraft writes are ADMIN-only -- OPS must be
+        // forbidden here even though it's allowed on the equivalent Flight endpoint.
+        mockMvc.perform(patch("/api/aircraft/" + UUID.randomUUID() + "/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"MAINTENANCE\"}"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void statusHistoryIncludesCreationSeedAndSubsequentTransitionInChronologicalOrder() throws Exception {
+        UUID id = createAircraft();
+
+        mockMvc.perform(patch("/api/aircraft/" + id + "/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"MAINTENANCE\",\"reason\":\"Scheduled check\"}"))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/aircraft/" + id + "/status-history"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$", hasSize(2)))
+                .andExpect(jsonPath("$[0].previousStatus").value(nullValue()))
+                .andExpect(jsonPath("$[0].newStatus").value("ACTIVE"))
+                .andExpect(jsonPath("$[0].source").value("CREATED"))
+                .andExpect(jsonPath("$[1].previousStatus").value("ACTIVE"))
+                .andExpect(jsonPath("$[1].newStatus").value("MAINTENANCE"))
+                .andExpect(jsonPath("$[1].source").value("OPERATOR"))
+                .andExpect(jsonPath("$[1].reason").value("Scheduled check"));
+    }
+
+    @Test
+    void statusHistoryForUnknownAircraftReturnsNotFound() throws Exception {
+        mockMvc.perform(get("/api/aircraft/" + UUID.randomUUID() + "/status-history"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @WithAnonymousUser
+    void statusHistoryWithoutAuthenticationReturnsUnauthorized() throws Exception {
+        mockMvc.perform(get("/api/aircraft/" + UUID.randomUUID() + "/status-history"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @WithMockUser(roles = "VIEWER")
+    void statusHistoryWithViewerRoleSucceeds() throws Exception {
+        // Read access follows the same convention as the other Aircraft GET
+        // endpoints: any authenticated role may read, only writes are ADMIN-gated.
+        mockMvc.perform(get("/api/aircraft/" + UUID.randomUUID() + "/status-history"))
+                .andExpect(status().isNotFound());
     }
 }

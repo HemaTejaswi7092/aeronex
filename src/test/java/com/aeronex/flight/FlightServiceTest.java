@@ -192,6 +192,17 @@ class FlightServiceTest {
     }
 
     @Test
+    void createThrowsWhenAircraftInMaintenance() {
+        when(airportRepository.findById(originId)).thenReturn(Optional.of(airportWithId(originId, "JFK")));
+        when(airportRepository.findById(destinationId)).thenReturn(Optional.of(airportWithId(destinationId, "LAX")));
+        when(aircraftRepository.findById(aircraftId))
+                .thenReturn(Optional.of(aircraftWithId(aircraftId, AircraftStatus.MAINTENANCE)));
+
+        assertThatThrownBy(() -> flightService.create(validRequest(originId, destinationId, aircraftId)))
+                .isInstanceOf(AircraftNotAvailableException.class);
+    }
+
+    @Test
     void findByIdThrowsWhenNotFound() {
         UUID id = UUID.randomUUID();
         when(flightRepository.findById(id)).thenReturn(Optional.empty());
