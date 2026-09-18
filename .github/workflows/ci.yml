@@ -178,9 +178,22 @@ jobs:
           # truncated. The log line JSON-escapes its quotes, so match on
           # unambiguous substrings either side of them rather than the literal
           # quoted phrase.
+          #
+          # The migration count/version number is deliberately NOT hardcoded:
+          # a fixed number (e.g. "8 migrations", "version v8") goes stale the
+          # moment a new V<n> migration is added — exactly what broke this
+          # step when V9 was introduced. Matching "[0-9]+" instead proves the
+          # same Flyway success semantics (a completed migration run reporting
+          # some count and some final version) regardless of how many
+          # migrations exist now or are added later. Flyway only ever emits
+          # this exact message on genuine success; a real migration failure
+          # throws instead (visible as a startup crash the prior "Wait for
+          # workloads to become Ready" step would already have caught) and
+          # never logs this line, so this still fails correctly on a real
+          # Flyway failure.
           logs=$(kubectl logs -l app=aeronex-app --tail=-1)
-          echo "$logs" | grep -q "Successfully applied 8 migrations to schema"
-          echo "$logs" | grep -q "now at version v8"
+          echo "$logs" | grep -qE "Successfully applied [0-9]+ migrations to schema"
+          echo "$logs" | grep -qE "now at version v[0-9]+"
 
       - name: Start port-forward to AeroNex service
         run: |
